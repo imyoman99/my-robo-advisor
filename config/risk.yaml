@@ -1,1 +1,2 @@
-# MDD 컷, 현금비중 등 위험관리 옵션 예시
+mdd_cut: -0.2
+cash_buffer: 0.05
