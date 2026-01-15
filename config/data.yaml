@@ -1,0 +1,5 @@
+# 데이터 수집/전처리 설정
+source: fdr  # fdr | csv
+use_cache: true
+cache_dir: data/raw
+preprocess: true

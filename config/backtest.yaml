@@ -1,0 +1,39 @@
+# 백테스팅 핵심 설정 (펀드 운용 컨셉: 정적+동적 슬리브를 항상 함께 운용)
+
+universe_key: domestic_etf
+
+periods:
+  start: null
+  end: null
+
+rebalance:
+  mode: time  # time | threshold
+  freq: M
+  threshold: 0.05
+
+costs:
+  fee_bps: 2.5
+  slippage_bps: 2.5
+
+initial_equity: 1.0
+
+# 슬리브(정적/동적) 조합
+# - alloc: 포트폴리오 내 자본 배분 비중 (합이 1.0이 되도록 권장)
+# - strategy: core/strategies/* 에 구현된 전략 이름
+# - params: 전략 클래스 생성자 파라미터
+sleeves:
+  - name: static
+    alloc: 0.50
+    strategy: all_weather
+    params:
+      # target_weights를 주면 고정 비중, 비우면 유니버스 균등
+      target_weights: {}
+
+  - name: dynamic
+    alloc: 0.50
+    strategy: daa
+    params:
+      aggressive_assets: []
+      defensive_assets: []
+      canary_assets: []
+      top_n: 2
