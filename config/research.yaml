@@ -1,1 +1,6 @@
-# 백테스트 전용 옵션 예시
+universe:
+	- 069500
+	- 252670
+rebalance_freq: M
+fee_bps: 2.5
+slippage_bps: 2.5
