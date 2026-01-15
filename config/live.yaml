@@ -1,6 +1,5 @@
 mode: paper
 initial_cash: 10000000
-universe:
-	- 069500  # KODEX 200 (예시)
-	- 252670  # KODEX 200선물인버스2X (예시)
+universe_key: domestic_etf
+universe: []
 slack_webhook: null

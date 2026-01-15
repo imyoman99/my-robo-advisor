@@ -1,3 +1,10 @@
 domestic_etf:
-	- 069500
-	- 252670
+  - "069500"
+  - "252670"
+
+us_all_weather:
+  - VTI
+  - TLT
+  - IEI
+  - GLD
+  - GSG

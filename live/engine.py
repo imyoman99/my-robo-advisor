@@ -17,6 +17,7 @@ class LiveEngine:
         self, weight_func: Optional[WeightFunc] = None, mock: bool = True
     ) -> None:
         self.config = load_yaml_config("live")
+        self.universe_config = load_yaml_config("universe")
         self.logger = get_logger("live.engine")
         self.broker = KISBroker(mock=mock)
         self.order_manager = OrderManager(self.broker)
@@ -30,8 +31,17 @@ class LiveEngine:
         w = 1.0 / len(symbols)
         return {s: w for s in symbols}
 
-    def _get_prices(self) -> Dict[str, float]:
+    def _get_universe(self) -> list[str]:
         symbols = self.config.get("universe", [])
+        if symbols:
+            return symbols
+        key = self.config.get("universe_key")
+        if key:
+            return self.universe_config.get(key, [])
+        return []
+
+    def _get_prices(self) -> Dict[str, float]:
+        symbols = self._get_universe()
         return {s: self.broker.get_price(s) for s in symbols}
 
     def _target_positions(self, prices: Dict[str, float]) -> Dict[str, int]:

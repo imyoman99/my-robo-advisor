@@ -1,6 +1,2 @@
-universe:
-	- 069500
-	- 252670
-rebalance_freq: M
-fee_bps: 2.5
-slippage_bps: 2.5
+# DEPRECATED: backtest.yaml + data.yaml + universe.yaml 사용
+deprecated: true
