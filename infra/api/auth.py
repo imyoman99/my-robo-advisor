@@ -1,30 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Optional
+import os
 
 
-@dataclass
-class Token:
-    access_token: str
-    expires_at: datetime
-
-    def is_expired(self) -> bool:
-        return datetime.utcnow() >= self.expires_at
-
-
-class TokenManager:
-    def __init__(self) -> None:
-        self._token: Optional[Token] = None
-
-    def set_token(self, access_token: str, expires_in: int) -> None:
-        self._token = Token(
-            access_token=access_token,
-            expires_at=datetime.utcnow() + timedelta(seconds=expires_in),
-        )
-
-    def get_token(self) -> Optional[str]:
-        if self._token is None or self._token.is_expired():
-            return None
-        return self._token.access_token
+def get_env_credentials() -> dict:
+    """환경변수 기반 인증 정보 조회(스켈레톤)."""
+    return {
+        "app_key": os.getenv("KIS_APP_KEY"),
+        "app_secret": os.getenv("KIS_APP_SECRET"),
+    }
