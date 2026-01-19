@@ -1,0 +1,1 @@
+pip install finance-datareader pandas pyarrow tqdm
