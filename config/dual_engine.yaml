@@ -1,0 +1,78 @@
+# Dual-Engine Backtest Configuration
+# - Any missing keys fall back to research/dual_engine/config.py:DEFAULT_CONFIG
+
+START_DATE: "2015-01-01"
+END_DATE: null
+INITIAL_CAPITAL: 100000000
+FEES: 0.0015
+TRADING_DAYS: 252
+FFILL: true
+
+MASTER:
+  STATIC_RATIO: 0.4
+  DYNAMIC_RATIO: 0.6
+  REBALANCE_FREQ: Quarterly
+
+STATIC:
+  REBALANCE_FREQ: Monthly
+  ASSETS:
+    KOSPI200: "069500"
+    BOND10Y: "148070"
+    GOLD: "411060"
+  WEIGHTS: [0.4, 0.4, 0.2]
+
+DYNAMIC:
+  REBALANCE_FREQ: Daily
+  MOMENTUM_WINDOW: 60
+  CORRELATION_WINDOW: 60
+  SEASONS:
+    - name: Spring
+      start_md: "03-01"
+      end_md: "05-31"
+      tickers: []
+    - name: Summer
+      start_md: "06-01"
+      end_md: "08-31"
+      tickers: []
+    - name: Fall
+      start_md: "09-01"
+      end_md: "11-30"
+      tickers: []
+    - name: Winter
+      start_md: "12-01"
+      end_md: "02-28"
+      tickers: []
+  LOGIC:
+    # 플러그인(레고) 스키마: type만 바꿔 조합 실험 가능
+    correlation_filter:
+      type: average   # none | average
+      threshold: 0.4
+      window: 60
+    momentum_ranker:
+      type: simple   # simple | vol_adj
+      window: 60
+      # vol_adj 옵션일 때만 사용
+      # vol_window: 60
+      # min_vol: 1.0e-8
+    selector:
+      type: rank_range   # rank_range | topn
+      rank_range: [4, 7]
+      replacement_order: [1, 2, 3, 8, 9, 10]
+    allocator:
+      type: slot_weights # slot_weights | equal | inv_vol
+      slot_weights: [0.3, 0.3, 0.2, 0.2]
+      # inv_vol 옵션일 때만 사용
+      # window: 60
+      # min_vol: 1.0e-8
+      # max_weight: 0.6
+    stop_loss:
+      type: trailing_pct # trailing_pct | none
+      pct: 0.05
+
+BENCHMARK_TICKER: "069500"
+
+DATA:
+  source: fdr
+  use_cache: true
+  cache_dir: data/raw
+  preprocess: true
