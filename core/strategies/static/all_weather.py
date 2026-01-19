@@ -17,7 +17,6 @@ class AllWeatherStrategy(Strategy):
         if self.target_weights:
             w = pd.Series({a: self.target_weights.get(a, 0.0) for a in assets})
         else:
-            # 기본: 균등비중
             w = (
                 pd.Series(1.0 / len(assets), index=assets)
                 if assets
