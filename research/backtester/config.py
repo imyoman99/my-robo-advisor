@@ -20,15 +20,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "STATIC": {
         "REBALANCE_FREQ": "Monthly",
-        "ASSETS": {
-            "KOSPI200": "069500",
-            "BOND10Y": "148070",
-            "GOLD": "411060",
-        },
-        "WEIGHTS": [0.4, 0.4, 0.2],
+        "FEES": 0.0004,
+        "ASSETS": [],
+        "WEIGHTS": [],
     },
     "DYNAMIC": {
         "REBALANCE_FREQ": "Daily",
+        "FEES": 0.0022,
         "MOMENTUM_WINDOW": 60,
         "CORRELATION_WINDOW": 60,
         "SEASONS": [
@@ -64,10 +62,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "BENCHMARK_TICKER": "069500",
     "DATA": {
-        "source": "fdr",
-        "use_cache": True,
-        "cache_dir": "data/raw",
-        "preprocess": True,
+        "root": "data",
+    },
+    "RESULTS": {
+        "root": "results",
     },
 }
 
@@ -82,9 +80,47 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
-def load_dual_engine_config(name: str = "dual_engine") -> Dict[str, Any]:
+def _apply_logic_profile(user_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """If DYNAMIC.LOGIC_PROFILE is provided, load config/logic_{profile}.yaml.
+
+    - If user also provided DYNAMIC.LOGIC, it wins.
+    - If the profile file is missing, raise a clear error.
+    """
+    dynamic = (
+        user_cfg.get("DYNAMIC") if isinstance(user_cfg.get("DYNAMIC"), dict) else {}
+    )
+    profile = (dynamic or {}).get("LOGIC_PROFILE")
+    if not profile:
+        return user_cfg
+
+    if isinstance((dynamic or {}).get("LOGIC"), dict) and (dynamic or {}).get("LOGIC"):
+        return user_cfg
+
+    profile_name = str(profile).strip()
+    try:
+        logic_cfg = load_yaml_config(f"logic_{profile_name}")
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(
+            f"LOGIC_PROFILE='{profile_name}' 설정을 찾지 못했습니다. "
+            f"config/logic_{profile_name}.yaml 파일을 생성하세요."
+        ) from e
+
+    out = deepcopy(user_cfg)
+    out.setdefault("DYNAMIC", {})
+    out["DYNAMIC"].setdefault("LOGIC", {})
+    if not isinstance(out["DYNAMIC"]["LOGIC"], dict):
+        out["DYNAMIC"]["LOGIC"] = {}
+    if not isinstance(logic_cfg, dict):
+        raise ValueError(f"logic_{profile_name}.yaml은 dict 구조여야 합니다.")
+
+    out["DYNAMIC"]["LOGIC"] = _deep_merge(out["DYNAMIC"]["LOGIC"], logic_cfg)
+    return out
+
+
+def load_dual_engine_config(name: str = "backtester") -> Dict[str, Any]:
     """Load config/{name}.yaml and merge onto DEFAULT_CONFIG."""
     user_cfg = load_yaml_config(name)
+    user_cfg = _apply_logic_profile(user_cfg)
     return _deep_merge(DEFAULT_CONFIG, user_cfg)
 
 

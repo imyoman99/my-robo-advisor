@@ -14,10 +14,36 @@ class StaticStrategy:
     cash: float
 
     def __post_init__(self) -> None:
-        self.tickers: List[str] = list(self.config["STATIC"]["ASSETS"].values())
-        self.weights: List[float] = list(self.config["STATIC"]["WEIGHTS"])
-        self.rebalance_freq: str = str(self.config["STATIC"]["REBALANCE_FREQ"])
-        self.fee: float = float(self.config.get("FEES", 0.0))
+        static_cfg = self.config.get("STATIC", {}) or {}
+
+        assets = static_cfg.get("ASSETS", {}) or {}
+        if isinstance(assets, dict):
+            self.tickers = [str(v) for v in assets.values()]
+        elif isinstance(assets, list):
+            self.tickers = [str(v) for v in assets]
+        else:
+            self.tickers = []
+
+        # tickers가 비어있으면 안전하게 동작하도록 기본값 1개(dummy) 방지 대신 예외
+        if not self.tickers:
+            raise ValueError(
+                "STATIC.ASSETS가 비어있습니다. config에서 자산을 지정하세요."
+            )
+
+        weights_raw = static_cfg.get("WEIGHTS")
+        if isinstance(weights_raw, list) and len(weights_raw) == len(self.tickers):
+            weights = [float(w) for w in weights_raw]
+        else:
+            # 길이가 맞지 않거나 없으면 동일가중치
+            n = len(self.tickers)
+            weights = [1.0 / n for _ in range(n)]
+        self.weights = weights
+
+        self.rebalance_freq = str(static_cfg.get("REBALANCE_FREQ", "Monthly"))
+        fee = static_cfg.get("FEES", None)
+        if fee is None:
+            fee = self.config.get("FEES", 0.0)
+        self.fee = float(fee)
         self.holdings: Dict[str, float] = {t: 0.0 for t in self.tickers}
 
     def rebalance_dates(self, index: pd.Index) -> set[pd.Timestamp]:

@@ -6,8 +6,8 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from ..universe import UniverseLoader
-from ..logic.factory import build_dynamic_components
-from ..logic.types import DynamicState
+from core.engine import build_dynamic_components
+from core.types import DynamicState
 from ..utils import apply_fee, calc_nav, freq_to_pandas, month_day_in_season
 
 
@@ -20,7 +20,11 @@ class DynamicStrategy:
         self.seasons = self.config["DYNAMIC"]["SEASONS"]
         self.logic = self.config["DYNAMIC"]["LOGIC"]
         self.rebalance_freq = str(self.config["DYNAMIC"]["REBALANCE_FREQ"])
-        self.fee = float(self.config.get("FEES", 0.0))
+        dynamic_cfg = self.config.get("DYNAMIC", {}) or {}
+        fee = dynamic_cfg.get("FEES", None)
+        if fee is None:
+            fee = self.config.get("FEES", 0.0)
+        self.fee = float(fee)
 
         self.holdings: Dict[str, float] = {}
         self.high_water: Dict[str, float] = {}

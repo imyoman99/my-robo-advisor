@@ -54,5 +54,6 @@ def preprocess_ohlcv(
         raise ValueError(f"Missing required columns: {missing}")
 
     df = df.loc[~df.index.isna()]
-    df = df.ffill().dropna()
+    df = df.ffill()
+    df = df.dropna(subset=list(required_cols))
     return df

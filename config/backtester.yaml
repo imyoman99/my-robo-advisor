@@ -1,0 +1,56 @@
+# Backtester Configuration
+# - Any missing keys fall back to research/backtester/config.py:DEFAULT_CONFIG
+
+START_DATE: "2015-01-01"
+END_DATE: null
+INITIAL_CAPITAL: 100000000
+TRADING_DAYS: 252
+FFILL: true
+
+MASTER:
+  STATIC_RATIO: 0.4
+  DYNAMIC_RATIO: 0.6
+  REBALANCE_FREQ: Quarterly
+
+STATIC:
+  REBALANCE_FREQ: Monthly
+  # ETF(정적) 총비용 예시: 0.03% ~ 0.05%  => 0.0003 ~ 0.0005
+  FEES: 0.0004
+  ASSETS:
+    KOSPI200: "069500"      # KODEX 200
+    BOND10Y:  "148070"      # KODEX 국고채10년
+    GOLD:     "132030"      # KODEX 골드선물(H)
+  WEIGHTS: [0.4, 0.4, 0.2]
+
+DYNAMIC:
+  REBALANCE_FREQ: Daily
+  # 개별주식(동적) 총비용 예시: 0.20% ~ 0.25%  => 0.0020 ~ 0.0025
+  FEES: 0.0022
+  MOMENTUM_WINDOW: 60
+  CORRELATION_WINDOW: 60
+  LOGIC_PROFILE: fast_follower  # fast_follower | sagye
+  SEASONS:
+    - name: Spring
+      start_md: "03-01"
+      end_md: "05-31"
+      tickers: ["000720","028050","047040","006360","000150","010140","034020","004020","005490","036460"]
+    - name: Summer
+      start_md: "06-01"
+      end_md: "08-31"
+      tickers: ["005930","000660","035420","035720","373220","051910","006400","247540","096770","009150"]
+    - name: Fall
+      start_md: "09-01"
+      end_md: "11-30"
+      tickers: ["055550","105560","086790","316140","139130","138930","003540","000810","032830","015760"]
+    - name: Winter
+      start_md: "12-01"
+      end_md: "02-28"
+      tickers: ["207940","068270","326030","006280","145020","128940","069620","003090","302440","000100"]
+
+BENCHMARK_TICKER: "069500"
+
+DATA:
+  root: ../data
+
+RESULTS:
+  root: ../results

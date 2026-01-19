@@ -3,3 +3,4 @@ numpy
 pyyaml
 requests
 finance-datareader
+matplotlib

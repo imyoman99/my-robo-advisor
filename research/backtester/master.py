@@ -34,6 +34,8 @@ class MasterPortfolio:
         )
 
         self.equity: pd.Series = pd.Series(dtype=float)
+        self.static_equity: pd.Series = pd.Series(dtype=float)
+        self.dynamic_equity: pd.Series = pd.Series(dtype=float)
 
     def _initial_static(self) -> float:
         return float(
@@ -64,6 +66,8 @@ class MasterPortfolio:
 
     def run(self) -> pd.Series:
         equity = []
+        static_equity = []
+        dynamic_equity = []
         last_nav: float | None = None
         for date, row in self.prices.iterrows():
             date_ts = pd.Timestamp(cast(Any, date))
@@ -79,7 +83,9 @@ class MasterPortfolio:
             if date_ts in self.master_rebalance_dates:
                 self._rebalance_master(date_ts, row)
 
-            total_nav = self.static_engine.nav(row) + self.dynamic_engine.nav(row)
+            static_nav = self.static_engine.nav(row)
+            dynamic_nav = self.dynamic_engine.nav(row)
+            total_nav = static_nav + dynamic_nav
             if (
                 not pd.notna(total_nav)
                 or total_nav == float("inf")
@@ -90,6 +96,10 @@ class MasterPortfolio:
                 total_nav = last_nav
             last_nav = float(total_nav)
             equity.append((date_ts, total_nav))
+            static_equity.append((date_ts, static_nav))
+            dynamic_equity.append((date_ts, dynamic_nav))
 
         self.equity = pd.Series({d: v for d, v in equity}).sort_index()
+        self.static_equity = pd.Series({d: v for d, v in static_equity}).sort_index()
+        self.dynamic_equity = pd.Series({d: v for d, v in dynamic_equity}).sort_index()
         return self.equity
