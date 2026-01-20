@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
-from .data_loader import load_local_parquet_prices
+from .data_loader import load_local_parquet_opens, load_local_parquet_prices
 
 
 class UniverseLoader:
@@ -48,6 +48,30 @@ class UniverseLoader:
             start=self.config.get("START_DATE"),
             end=self.config.get("END_DATE"),
             ffill=bool(self.config.get("FFILL", True)),
+        )
+        return prices.dropna(how="all")
+
+    def load_open_prices(self) -> pd.DataFrame:
+        data_cfg = self.config.get("DATA", {}) or {}
+        data_root = "data"
+        if isinstance(data_cfg, dict):
+            data_root = data_cfg.get("root") or data_cfg.get("base_dir") or data_root
+
+        data_root_path = Path(data_root)
+        if not data_root_path.is_absolute():
+            project_root = Path(__file__).resolve().parents[2]
+            data_root_path = (project_root / data_root_path).resolve()
+        if data_root_path.name not in {"processed", "raw"}:
+            processed_dir = data_root_path / "processed"
+            if processed_dir.exists():
+                data_root_path = processed_dir
+
+        prices = load_local_parquet_opens(
+            self.all_tickers(),
+            data_root=str(data_root_path),
+            start=self.config.get("START_DATE"),
+            end=self.config.get("END_DATE"),
+            ffill=False,
         )
         return prices.dropna(how="all")
 
