@@ -219,10 +219,14 @@ def load_dual_engine_config(
 
     json_cfg = user_cfg.get("JSON") if isinstance(user_cfg.get("JSON"), dict) else {}
     json_enabled = bool(json_cfg.get("enabled", False))
-    json_run_name = json_run or json_cfg.get("run_dir") or json_cfg.get("folder")
-    json_path = json_cfg.get("path")
+    json_run_name = (
+        json_run
+        or (json_cfg.get("run_dir") if json_enabled else None)
+        or (json_cfg.get("folder") if json_enabled else None)
+    )
+    json_path = json_cfg.get("path") if json_enabled else None
 
-    if json_run_name or json_path or json_enabled:
+    if json_run or json_path or json_enabled:
         if json_path and Path(str(json_path)).is_absolute():
             run_dir = Path(str(json_path))
         else:
