@@ -27,7 +27,7 @@ STATIC:
   WEIGHTS: [0.4, 0.4, 0.2]
 
 DYNAMIC:
-  REBALANCE_FREQ: Monthly
+  REBALANCE_FREQ: Monthly # Daily
   # 개별주식(동적) 총비용 예시: 0.20% ~ 0.25%  => 0.0020 ~ 0.0025
   FEES: 0.0022
   MOMENTUM_WINDOW: 22
