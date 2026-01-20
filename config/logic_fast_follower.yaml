@@ -2,10 +2,10 @@
 correlation_filter:
   type: average   # none | average
   threshold: 0.4
-  window: 60
+  window: 22
 momentum_ranker:
   type: simple   # simple | vol_adj
-  window: 60
+  window: 22
   # vol_adj 옵션일 때만 사용
   # vol_window: 60
   # min_vol: 1.0e-8
