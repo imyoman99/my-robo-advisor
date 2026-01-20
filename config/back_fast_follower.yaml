@@ -7,6 +7,10 @@ INITIAL_CAPITAL: 100000000
 TRADING_DAYS: 252
 FFILL: true
 
+JSON:
+  enabled: false
+  run_dir: # backtester_20260120_141740
+
 MASTER:
   STATIC_RATIO: 0.4
   DYNAMIC_RATIO: 0.6
@@ -23,11 +27,11 @@ STATIC:
   WEIGHTS: [0.4, 0.4, 0.2]
 
 DYNAMIC:
-  REBALANCE_FREQ: Daily
+  REBALANCE_FREQ: Monthly
   # 개별주식(동적) 총비용 예시: 0.20% ~ 0.25%  => 0.0020 ~ 0.0025
   FEES: 0.0022
-  MOMENTUM_WINDOW: 60
-  CORRELATION_WINDOW: 60
+  MOMENTUM_WINDOW: 22
+  CORRELATION_WINDOW: 22
   LOGIC_PROFILE: fast_follower  # fast_follower | sagye
   SEASONS:
     - name: Spring
