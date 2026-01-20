@@ -8,7 +8,7 @@ TRADING_DAYS: 252
 FFILL: true
 
 JSON:
-  enabled: true
+  enabled: false
   run_dir: backtester_20260120_141740
 
 MASTER:
@@ -27,7 +27,7 @@ STATIC:
   WEIGHTS: [0.4, 0.4, 0.2]
 
 DYNAMIC:
-  REBALANCE_FREQ: Daily
+  REBALANCE_FREQ: Monthly
   # 개별주식(동적) 총비용 예시: 0.20% ~ 0.25%  => 0.0020 ~ 0.0025
   FEES: 0.0022
   MOMENTUM_WINDOW: 60
