@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -138,6 +139,42 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
     (run_dir / "config_merged.json").write_text(
         json.dumps(result.config, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+
+    selection_log = list(getattr(result, "dynamic_selection_log", []) or [])
+    if selection_log:
+        (run_dir / "dynamic_selection.json").write_text(
+            json.dumps(selection_log, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        rows: list[dict[str, Any]] = []
+        for entry in selection_log:
+            date = entry.get("date")
+            season = entry.get("season")
+            selected = set(entry.get("selected", []) or [])
+            corr_count = entry.get("corr_count", {}) or {}
+            momentum = entry.get("momentum", {}) or {}
+            corr_rank = entry.get("corr_rank", {}) or {}
+            momentum_rank = entry.get("momentum_rank", {}) or {}
+            total_score = entry.get("total_score", {}) or {}
+            tickers = sorted(set(corr_count) | set(momentum) | selected)
+            for t in tickers:
+                rows.append(
+                    {
+                        "date": date,
+                        "season": season,
+                        "ticker": t,
+                        "selected": t in selected,
+                        "corr_count": corr_count.get(t),
+                        "momentum": momentum.get(t),
+                        "corr_rank": corr_rank.get(t),
+                        "momentum_rank": momentum_rank.get(t),
+                        "total_score": total_score.get(t),
+                    }
+                )
+
+        if rows:
+            pd.DataFrame(rows).to_csv(run_dir / "dynamic_selection.csv", index=False)
 
     chart_data = None
     if result.equity is not None and not result.equity.empty:
@@ -314,6 +351,16 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
             season_sections.append(f"| {t} | {total_ret:.6f} | {mdd:.6f} |")
         season_sections.append("")
 
+    selection_lines: list[str] = []
+    if selection_log:
+        selection_lines = [
+            "## Dynamic Selection",
+            "",
+            "- Selection log: dynamic_selection.json",
+            "- Flat scores: dynamic_selection.csv",
+            "",
+        ]
+
     md_lines = [
         f"# Backtester ({config_name})",
         "",
@@ -337,6 +384,7 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         f"| Sharpe | {static_perf['Sharpe']:.6f} | {dynamic_perf['Sharpe']:.6f} |",
         f"| TotalReturn | {static_perf['TotalReturn']:.6f} | {dynamic_perf['TotalReturn']:.6f} |",
         "",
+        *selection_lines,
         "## Charts",
         "",
         "![Equity Curve](equity_curve.png)",

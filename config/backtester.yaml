@@ -1,7 +1,7 @@
 # Backtester Configuration
 # - Any missing keys fall back to research/backtester/config.py:DEFAULT_CONFIG
 
-START_DATE: "2015-01-01"
+START_DATE: "2020-01-01"
 END_DATE: null
 INITIAL_CAPITAL: 100000000
 TRADING_DAYS: 252
@@ -11,13 +11,8 @@ JSON:
   enabled: false
   run_dir: backtester_20260120_141740
 
-MASTER:
-  STATIC_RATIO: 0.4
-  DYNAMIC_RATIO: 0.6
-  REBALANCE_FREQ: Quarterly
-
 STATIC:
-  REBALANCE_FREQ: Monthly
+  RATIO: 0.5
   # ETF(정적) 총비용 예시: 0.03% ~ 0.05%  => 0.0003 ~ 0.0005
   FEES: 0.0004
   ASSETS:
@@ -27,12 +22,59 @@ STATIC:
   WEIGHTS: [0.4, 0.4, 0.2]
 
 DYNAMIC:
-  REBALANCE_FREQ: Monthly
+  RATIO: 0.5
   # 개별주식(동적) 총비용 예시: 0.20% ~ 0.25%  => 0.0020 ~ 0.0025
   FEES: 0.0022
   MOMENTUM_WINDOW: 60
   CORRELATION_WINDOW: 60
-  LOGIC_PROFILE: fast_follower  # fast_follower | sagye
+  SELECTION:
+    mode: auto           # season | auto
+    top_n: 10
+    lookback_years: 3
+    corr_threshold: 0.3
+    corr_drop_pct: 0.2   # drop bottom % by corr_count before scoring
+    momentum_window: 60
+    corr_window: 60
+    weighting: equal     # equal | allocator | rank_weights
+    rank_weights: []     # e.g. [0.3,0.3,0.2,0.2] (top_n length)
+    score_weights:       # factor scoring weights (sum normalized internally)
+      corr: 0.4
+      momentum: 0.6
+    exclude_kr_etf: true
+    FILTERS:
+      min_age_days: 750
+      min_market_cap: 50000000000
+      min_price: 1000
+      min_turnover: 30000000000
+      turnover_window: 60
+    # universe_root: ../data  # optional: override data root for ticker scan
+  LOGIC_PROFILE: null
+  LOGIC:
+    correlation_filter:
+      type: average   # none | average
+      threshold: 0.4
+      window: 60
+    momentum_ranker:
+      type: simple   # simple | vol_adj
+      window: 60
+      # vol_adj 옵션일 때만 사용
+      # vol_window: 60
+      # min_vol: 1.0e-8
+    selector:
+      type: rank_range   # rank_range | topn
+      rank_range: [4, 7]
+      replacement_order: [1, 2, 3, 8, 9, 10]
+    allocator:
+      type: slot_weights # slot_weights | equal | inv_vol
+      slot_weights: [0.3, 0.3, 0.2, 0.2]
+      # inv_vol 옵션일 때만 사용
+      # window: 60
+      # min_vol: 1.0e-8
+      # max_weight: 0.6
+    stop_loss:
+      type: trailing_pct # trailing_pct | none
+      pct: 0.05
+  # NOTE: mode=auto이면 SEASONS는 무시됩니다.
   SEASONS:
     - name: Spring
       start_md: "03-01"

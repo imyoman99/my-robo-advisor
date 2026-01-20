@@ -33,6 +33,7 @@ class DualEngineResult:
     performance: Dict[str, float]
     benchmark_performance: Dict[str, float]
     prices: pd.DataFrame
+    dynamic_selection_log: list[Dict[str, Any]]
 
 
 def run_dual_engine_backtest(
@@ -89,6 +90,7 @@ def run_dual_engine_backtest(
         performance=perf,
         benchmark_performance=bench_perf,
         prices=prices,
+        dynamic_selection_log=list(getattr(master.dynamic_engine, "selection_log", [])),
     )
 
 

@@ -6,7 +6,7 @@ import pandas as pd
 
 from .strategies import DynamicStrategy, StaticStrategy
 from .universe import UniverseLoader
-from .utils import freq_to_pandas, to_date_index
+from .utils import to_date_index
 
 
 class MasterPortfolio:
@@ -15,60 +15,77 @@ class MasterPortfolio:
     ) -> None:
         self.config = config
         self.loader = UniverseLoader(config)
-        self.prices = prices if prices is not None else self.loader.load_prices()
-        self.prices.index = pd.DatetimeIndex(to_date_index(self.prices))
-        self.open_prices = self.loader.load_open_prices()
-        self.open_prices.index = pd.DatetimeIndex(to_date_index(self.open_prices))
-        self.open_prices = self.open_prices.reindex(
-            index=self.prices.index, columns=self.prices.columns
+        self.full_prices = prices if prices is not None else self.loader.load_prices()
+        self.full_prices.index = pd.DatetimeIndex(to_date_index(self.full_prices))
+        self.full_open_prices = self.loader.load_open_prices()
+        self.full_open_prices.index = pd.DatetimeIndex(
+            to_date_index(self.full_open_prices)
         )
+        self.full_open_prices = self.full_open_prices.reindex(
+            index=self.full_prices.index, columns=self.full_prices.columns
+        )
+
+        start = self.config.get("START_DATE")
+        end = self.config.get("END_DATE")
+        if start or end:
+            self.prices = self.full_prices.loc[start:end]
+            self.open_prices = self.full_open_prices.loc[start:end]
+        else:
+            self.prices = self.full_prices
+            self.open_prices = self.full_open_prices
 
         self.static_engine = StaticStrategy(config, cash=self._initial_static())
         self.dynamic_engine = DynamicStrategy(config, cash=self._initial_dynamic())
 
-        self.master_rebalance_dates = set(
-            self.prices.resample(freq_to_pandas(config["MASTER"]["REBALANCE_FREQ"]))
-            .last()
-            .index
-        )
-        self.static_rebalance_dates = self.static_engine.rebalance_dates(
-            self.prices.index
-        )
-        self.dynamic_rebalance_dates = self.dynamic_engine.rebalance_dates(
-            self.prices.index
-        )
-
         self.equity: pd.Series = pd.Series(dtype=float)
         self.static_equity: pd.Series = pd.Series(dtype=float)
         self.dynamic_equity: pd.Series = pd.Series(dtype=float)
-        self.pending_master_rebalance: bool = False
 
     def _initial_static(self) -> float:
-        return float(
-            self.config["INITIAL_CAPITAL"] * self.config["MASTER"]["STATIC_RATIO"]
-        )
+        static_cfg = self.config.get("STATIC", {}) or {}
+        dynamic_cfg = self.config.get("DYNAMIC", {}) or {}
+        static_ratio = static_cfg.get("RATIO")
+        dynamic_ratio = dynamic_cfg.get("RATIO")
+        if static_ratio is None and dynamic_ratio is None:
+            static_ratio = 0.5
+            dynamic_ratio = 0.5
+        elif static_ratio is None:
+            dynamic_ratio = float(dynamic_ratio)
+            static_ratio = max(0.0, 1.0 - dynamic_ratio)
+        elif dynamic_ratio is None:
+            static_ratio = float(static_ratio)
+            dynamic_ratio = max(0.0, 1.0 - static_ratio)
+        else:
+            static_ratio = float(static_ratio)
+            dynamic_ratio = float(dynamic_ratio)
+            total = static_ratio + dynamic_ratio
+            if total > 0:
+                static_ratio /= total
+
+        return float(self.config["INITIAL_CAPITAL"] * float(static_ratio))
 
     def _initial_dynamic(self) -> float:
-        return float(
-            self.config["INITIAL_CAPITAL"] * self.config["MASTER"]["DYNAMIC_RATIO"]
-        )
+        static_cfg = self.config.get("STATIC", {}) or {}
+        dynamic_cfg = self.config.get("DYNAMIC", {}) or {}
+        static_ratio = static_cfg.get("RATIO")
+        dynamic_ratio = dynamic_cfg.get("RATIO")
+        if static_ratio is None and dynamic_ratio is None:
+            static_ratio = 0.5
+            dynamic_ratio = 0.5
+        elif static_ratio is None:
+            dynamic_ratio = float(dynamic_ratio)
+            static_ratio = max(0.0, 1.0 - dynamic_ratio)
+        elif dynamic_ratio is None:
+            static_ratio = float(static_ratio)
+            dynamic_ratio = max(0.0, 1.0 - static_ratio)
+        else:
+            static_ratio = float(static_ratio)
+            dynamic_ratio = float(dynamic_ratio)
+            total = static_ratio + dynamic_ratio
+            if total > 0:
+                dynamic_ratio /= total
 
-    def _rebalance_master(self, date: pd.Timestamp, prices: pd.Series) -> None:
-        total_nav = self.static_engine.nav(prices) + self.dynamic_engine.nav(prices)
-        target_static = total_nav * float(self.config["MASTER"]["STATIC_RATIO"])
-        target_dynamic = total_nav * float(self.config["MASTER"]["DYNAMIC_RATIO"])
-
-        static_nav = self.static_engine.nav(prices)
-        dynamic_nav = self.dynamic_engine.nav(prices)
-
-        if static_nav > target_static:
-            delta = static_nav - target_static
-            self.static_engine.withdraw_cash(delta, prices)
-            self.dynamic_engine.add_cash(delta)
-        elif dynamic_nav > target_dynamic:
-            delta = dynamic_nav - target_dynamic
-            self.dynamic_engine.withdraw_cash(delta, prices)
-            self.static_engine.add_cash(delta)
+        return float(self.config["INITIAL_CAPITAL"] * float(dynamic_ratio))
 
     def run(self) -> pd.Series:
         equity = []
@@ -83,24 +100,16 @@ class MasterPortfolio:
                 else row
             )
 
-            if self.pending_master_rebalance:
-                self._rebalance_master(date_ts, open_row)
-                self.pending_master_rebalance = False
-
-            self.static_engine.on_day(
-                date_ts, row, open_row, self.static_rebalance_dates
-            )
+            self.static_engine.on_day(date_ts, row, open_row, set())
             self.dynamic_engine.on_day(
                 date_ts,
                 row,
                 open_row,
-                self.prices,
-                self.dynamic_rebalance_dates,
+                self.full_prices,
+                self.full_open_prices,
+                set(),
                 self.loader,
             )
-
-            if date_ts in self.master_rebalance_dates:
-                self.pending_master_rebalance = True
 
             static_nav = self.static_engine.nav(row)
             dynamic_nav = self.dynamic_engine.nav(row)
