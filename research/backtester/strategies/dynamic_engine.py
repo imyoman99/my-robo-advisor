@@ -29,6 +29,7 @@ class DynamicStrategy:
         self.holdings: Dict[str, float] = {}
         self.high_water: Dict[str, float] = {}
         self.active_season: Optional[str] = None
+        self.pending_shares: Dict[str, float] | None = None
 
         self.slot_count = self._infer_slot_count()
         (
@@ -67,45 +68,59 @@ class DynamicStrategy:
 
         return 4
 
-    def _rebalance_to_targets(
+    def _calc_target_shares(
         self, prices: pd.Series, targets: Dict[str, float]
-    ) -> None:
+    ) -> Dict[str, float]:
         nav = calc_nav(prices, self.holdings, self.cash)
+        target_shares: Dict[str, float] = {}
 
-        for t, w in targets.items():
+        universe = set(self.holdings.keys()) | set(targets.keys())
+        for t in universe:
             price = float(prices.get(t, 0.0))
             if price <= 0 or pd.isna(price):
+                target_shares[t] = self.holdings.get(t, 0.0)
                 continue
-            target_value = nav * float(w)
-            target_shares = target_value / price
-            current_shares = self.holdings.get(t, 0.0)
-            delta = target_shares - current_shares
+            w = float(targets.get(t, 0.0))
+            target_value = nav * w
+            target_shares[t] = target_value / price
+        return target_shares
+
+    def _execute_to_shares(
+        self, prices: pd.Series, target_shares: Dict[str, float]
+    ) -> Dict[str, float]:
+        remaining: Dict[str, float] = {}
+        for t, target in target_shares.items():
+            price = float(prices.get(t, 0.0))
+            if price <= 0 or pd.isna(price):
+                remaining[t] = target
+                continue
+            current = self.holdings.get(t, 0.0)
+            delta = target - current
             trade_value = delta * price
             fee = apply_fee(trade_value, self.fee)
             self.cash -= trade_value + fee
-            self.holdings[t] = current_shares + delta
-            self.high_water[t] = max(self.high_water.get(t, price), price)
-
-        for t in list(self.holdings.keys()):
-            if t not in targets:
-                price = float(prices.get(t, 0.0))
-                if price <= 0 or pd.isna(price):
-                    # 가격이 비정상이면 청산 계산을 스킵 (다음 유효 시점에 처리)
-                    continue
-                shares = self.holdings.pop(t, 0.0)
-                trade_value = shares * price
-                fee = apply_fee(trade_value, self.fee)
-                self.cash += trade_value - fee
+            new_shares = current + delta
+            if new_shares <= 0:
+                self.holdings.pop(t, None)
                 self.high_water.pop(t, None)
+            else:
+                self.holdings[t] = new_shares
+                self.high_water[t] = max(self.high_water.get(t, price), price)
+        return remaining
 
     def on_day(
         self,
         date: pd.Timestamp,
-        prices: pd.Series,
+        close_prices: pd.Series,
+        open_prices: pd.Series,
         prices_df: pd.DataFrame,
         rebalance_set: set[pd.Timestamp],
         loader: UniverseLoader,
     ) -> None:
+        if self.pending_shares:
+            remaining = self._execute_to_shares(open_prices, self.pending_shares)
+            self.pending_shares = remaining or None
+
         season = self._current_season(date)
         if self.active_season != season["name"]:
             self.active_season = season["name"]
@@ -123,7 +138,7 @@ class DynamicStrategy:
         state = DynamicState(
             cash=self.cash, holdings=self.holdings, high_water=self.high_water
         )
-        state = self.stop_loss.apply(state=state, prices=prices, ranked=ranked)
+        state = self.stop_loss.apply(state=state, prices=close_prices, ranked=ranked)
         self.cash, self.holdings, self.high_water = (
             state.cash,
             state.holdings,
@@ -135,7 +150,7 @@ class DynamicStrategy:
             targets = self.allocator.targets(
                 prices=prices_df, tickers=selected, as_of=date
             )
-            self._rebalance_to_targets(prices, targets)
+            self.pending_shares = self._calc_target_shares(close_prices, targets)
 
     def nav(self, prices: pd.Series) -> float:
         return calc_nav(prices, self.holdings, self.cash)

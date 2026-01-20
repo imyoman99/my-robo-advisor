@@ -40,10 +40,11 @@ def _find_parquet_path(base: Path, symbol: str) -> Path | None:
     return None
 
 
-def _read_parquet_close(
+def _read_parquet_field(
     path: Path,
     start: str | None,
     end: str | None,
+    field: str,
 ) -> pd.Series:
     df = pd.read_parquet(path)
 
@@ -61,15 +62,16 @@ def _read_parquet_close(
     if end:
         df = df.loc[df.index <= pd.to_datetime(end)]
 
-    close_col = (
-        "close"
-        if "close" in df.columns
-        else ("Close" if "Close" in df.columns else None)
-    )
-    if close_col is None:
-        raise ValueError(f"Close column not found in {path}")
+    field_lower = str(field).lower()
+    candidates = [field_lower, field_lower.capitalize(), field_lower.upper()]
+    if field_lower == "close":
+        candidates.extend(["adj close", "adj_close", "Adj Close", "Adj_Close"])
 
-    series = df[close_col].copy()
+    field_col = next((c for c in candidates if c in df.columns), None)
+    if field_col is None:
+        raise ValueError(f"{field} column not found in {path}")
+
+    series = df[field_col].copy()
     series.name = path.stem
     return series
 
@@ -92,7 +94,33 @@ def load_local_parquet_prices(
         path = _find_parquet_path(base, symbol)
         if path is None:
             raise FileNotFoundError(f"Parquet not found for {symbol}")
-        frames.append(_read_parquet_close(path, start, end))
+        frames.append(_read_parquet_field(path, start, end, "close"))
+
+    prices = pd.concat(frames, axis=1).sort_index()
+    if ffill:
+        prices = prices.ffill()
+    return prices.dropna(how="all")
+
+
+def load_local_parquet_opens(
+    tickers: Iterable[str],
+    *,
+    data_root: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    ffill: bool = False,
+) -> pd.DataFrame:
+    base = Path(data_root).resolve()
+    if not base.exists():
+        raise FileNotFoundError(f"data root not found: {data_root}")
+
+    frames = []
+    for t in tickers:
+        symbol = str(t)
+        path = _find_parquet_path(base, symbol)
+        if path is None:
+            raise FileNotFoundError(f"Parquet not found for {symbol}")
+        frames.append(_read_parquet_field(path, start, end, "open"))
 
     prices = pd.concat(frames, axis=1).sort_index()
     if ffill:

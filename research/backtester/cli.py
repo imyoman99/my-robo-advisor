@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import datetime
@@ -15,10 +16,12 @@ if __package__ is None or __package__ == "":
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
     from research.backtester.runner import run_dual_engine_backtest
+    from research.backtester.config import load_yaml_config, resolve_logic_config_name
     from research.backtester.metrics import performance_summary
     from research.backtester.utils import month_day_in_season
 else:
     from .runner import run_dual_engine_backtest
+    from .config import load_yaml_config, resolve_logic_config_name
     from .metrics import performance_summary
     from .utils import month_day_in_season
 
@@ -28,18 +31,34 @@ def main() -> None:
     parser.add_argument(
         "--config", type=str, default="backtester", help="config/{name}.yaml"
     )
+    parser.add_argument(
+        "--logic",
+        type=str,
+        default=None,
+        help="logic config name (e.g. logic_fast_follower_01 or config.logic_fast_follower_01)",
+    )
+    parser.add_argument(
+        "--json-run",
+        type=str,
+        default=None,
+        help="results run folder name to load config_backtester.json & config_logic.json",
+    )
     parser.add_argument("--start", type=str, default=None)
     parser.add_argument("--end", type=str, default=None)
     parser.add_argument("--print-equity-head", type=int, default=0)
     args = parser.parse_args()
 
     result = run_dual_engine_backtest(
-        config_name=args.config, start=args.start, end=args.end
+        config_name=args.config,
+        logic_name=args.logic,
+        json_run=args.json_run,
+        start=args.start,
+        end=args.end,
     )
     print("[Backtester]", result.performance)
     print("[Benchmark]", result.benchmark_performance)
 
-    _save_results(result, args.config)
+    _save_results(result, args.config, args.logic)
 
     if args.print_equity_head and not result.equity.empty:
         print(result.equity.head(args.print_equity_head))
@@ -91,11 +110,34 @@ def _season_mask(index: pd.DatetimeIndex, start_md: str, end_md: str) -> pd.Seri
     )
 
 
-def _save_results(result, config_name: str) -> None:
+def _save_results(result, config_name: str, logic_name: str | None) -> None:
     output_root = _resolve_output_root(result.config)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = output_root / f"{config_name}_{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        user_cfg = load_yaml_config(config_name)
+    except Exception:
+        user_cfg = {}
+
+    logic_cfg = {}
+    logic_config_name = resolve_logic_config_name(user_cfg, logic_name)
+    if logic_config_name:
+        try:
+            logic_cfg = load_yaml_config(logic_config_name)
+        except Exception:
+            logic_cfg = {}
+
+    (run_dir / "config_backtester.json").write_text(
+        json.dumps(user_cfg, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (run_dir / "config_logic.json").write_text(
+        json.dumps(logic_cfg, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (run_dir / "config_merged.json").write_text(
+        json.dumps(result.config, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     chart_data = None
     if result.equity is not None and not result.equity.empty:

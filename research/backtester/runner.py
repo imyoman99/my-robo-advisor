@@ -39,10 +39,18 @@ def run_dual_engine_backtest(
     *,
     config_name: str = "backtester",
     config: Optional[Dict[str, Any]] = None,
+    logic_name: Optional[str] = None,
+    json_run: Optional[str] = None,
     start: Optional[str] = None,
     end: Optional[str] = None,
 ) -> DualEngineResult:
-    cfg = config if config is not None else load_dual_engine_config(config_name)
+    cfg = (
+        config
+        if config is not None
+        else load_dual_engine_config(
+            config_name, logic_name=logic_name, json_run=json_run
+        )
+    )
     cfg = apply_overrides(cfg, start=start, end=end)
 
     master = MasterPortfolio(cfg)

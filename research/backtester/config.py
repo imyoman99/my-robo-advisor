@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Optional
+import json
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
-from infra.config import load_yaml_config
+from infra.config import load_yaml_config, project_root
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -117,10 +119,129 @@ def _apply_logic_profile(user_cfg: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def load_dual_engine_config(name: str = "backtester") -> Dict[str, Any]:
+def _normalize_logic_name(name: str) -> str:
+    raw = str(name).strip()
+    if raw.startswith("config."):
+        raw = raw[len("config.") :]
+    if raw.startswith("config/") or raw.startswith("config\\"):
+        raw = raw[7:]
+    if raw.endswith(".yaml"):
+        raw = raw[:-5]
+    return raw
+
+
+def _apply_logic_override(user_cfg: Dict[str, Any], logic_name: str) -> Dict[str, Any]:
+    normalized = _normalize_logic_name(logic_name)
+    if not normalized:
+        return user_cfg
+
+    try:
+        logic_cfg = load_yaml_config(normalized)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(
+            f"LOGIC override='{logic_name}' 설정을 찾지 못했습니다. "
+            f"config/{normalized}.yaml 파일을 생성하세요."
+        ) from e
+
+    if not isinstance(logic_cfg, dict):
+        raise ValueError(f"{normalized}.yaml은 dict 구조여야 합니다.")
+
+    out = deepcopy(user_cfg)
+    out.setdefault("DYNAMIC", {})
+    out["DYNAMIC"]["LOGIC"] = logic_cfg
+    return out
+
+
+def _apply_logic_override_dict(
+    user_cfg: Dict[str, Any], logic_cfg: Dict[str, Any]
+) -> Dict[str, Any]:
+    out = deepcopy(user_cfg)
+    out.setdefault("DYNAMIC", {})
+    out["DYNAMIC"]["LOGIC"] = logic_cfg
+    return out
+
+
+def resolve_logic_config_name(
+    user_cfg: Dict[str, Any], logic_name: Optional[str]
+) -> Optional[str]:
+    if logic_name:
+        return _normalize_logic_name(logic_name)
+
+    dynamic = (
+        user_cfg.get("DYNAMIC") if isinstance(user_cfg.get("DYNAMIC"), dict) else {}
+    )
+    if isinstance((dynamic or {}).get("LOGIC"), dict) and (dynamic or {}).get("LOGIC"):
+        return None
+
+    profile = (dynamic or {}).get("LOGIC_PROFILE")
+    if not profile:
+        return None
+    profile_name = str(profile).strip()
+    return f"logic_{profile_name}"
+
+
+def _resolve_results_root(cfg: Dict[str, Any]) -> Path:
+    results_cfg = cfg.get("RESULTS", {}) or {}
+    root = results_cfg.get("root") or "results"
+    root_path = Path(root)
+    if not root_path.is_absolute():
+        root_path = (project_root() / root_path).resolve()
+    return root_path
+
+
+def _load_json_file(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(f"Config not found: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"JSON config must be dict: {path}")
+    return data
+
+
+def _load_json_configs_from_run_dir(
+    run_dir: Path,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    backtester_path = run_dir / "config_backtester.json"
+    logic_path = run_dir / "config_logic.json"
+    backtester_cfg = _load_json_file(backtester_path)
+    logic_cfg = _load_json_file(logic_path)
+    return backtester_cfg, logic_cfg
+
+
+def load_dual_engine_config(
+    name: str = "backtester",
+    *,
+    logic_name: Optional[str] = None,
+    json_run: Optional[str] = None,
+) -> Dict[str, Any]:
     """Load config/{name}.yaml and merge onto DEFAULT_CONFIG."""
     user_cfg = load_yaml_config(name)
-    user_cfg = _apply_logic_profile(user_cfg)
+
+    json_cfg = user_cfg.get("JSON") if isinstance(user_cfg.get("JSON"), dict) else {}
+    json_enabled = bool(json_cfg.get("enabled", False))
+    json_run_name = (
+        json_run
+        or (json_cfg.get("run_dir") if json_enabled else None)
+        or (json_cfg.get("folder") if json_enabled else None)
+    )
+    json_path = json_cfg.get("path") if json_enabled else None
+
+    if json_run or json_path or json_enabled:
+        if json_path and Path(str(json_path)).is_absolute():
+            run_dir = Path(str(json_path))
+        else:
+            if not json_run_name:
+                raise ValueError(
+                    "JSON 모드가 활성화되었지만 run_dir가 지정되지 않았습니다."
+                )
+            run_dir = _resolve_results_root(user_cfg) / str(json_run_name)
+        backtester_cfg, logic_cfg = _load_json_configs_from_run_dir(run_dir)
+        user_cfg = _apply_logic_override_dict(backtester_cfg, logic_cfg)
+    else:
+        if logic_name:
+            user_cfg = _apply_logic_override(user_cfg, logic_name)
+        else:
+            user_cfg = _apply_logic_profile(user_cfg)
     return _deep_merge(DEFAULT_CONFIG, user_cfg)
 
 

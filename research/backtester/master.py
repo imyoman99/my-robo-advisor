@@ -17,6 +17,11 @@ class MasterPortfolio:
         self.loader = UniverseLoader(config)
         self.prices = prices if prices is not None else self.loader.load_prices()
         self.prices.index = pd.DatetimeIndex(to_date_index(self.prices))
+        self.open_prices = self.loader.load_open_prices()
+        self.open_prices.index = pd.DatetimeIndex(to_date_index(self.open_prices))
+        self.open_prices = self.open_prices.reindex(
+            index=self.prices.index, columns=self.prices.columns
+        )
 
         self.static_engine = StaticStrategy(config, cash=self._initial_static())
         self.dynamic_engine = DynamicStrategy(config, cash=self._initial_dynamic())
@@ -36,6 +41,7 @@ class MasterPortfolio:
         self.equity: pd.Series = pd.Series(dtype=float)
         self.static_equity: pd.Series = pd.Series(dtype=float)
         self.dynamic_equity: pd.Series = pd.Series(dtype=float)
+        self.pending_master_rebalance: bool = False
 
     def _initial_static(self) -> float:
         return float(
@@ -71,17 +77,30 @@ class MasterPortfolio:
         last_nav: float | None = None
         for date, row in self.prices.iterrows():
             date_ts = pd.Timestamp(cast(Any, date))
-            self.static_engine.on_day(date_ts, row, self.static_rebalance_dates)
+            open_row = (
+                self.open_prices.loc[date_ts]
+                if date_ts in self.open_prices.index
+                else row
+            )
+
+            if self.pending_master_rebalance:
+                self._rebalance_master(date_ts, open_row)
+                self.pending_master_rebalance = False
+
+            self.static_engine.on_day(
+                date_ts, row, open_row, self.static_rebalance_dates
+            )
             self.dynamic_engine.on_day(
                 date_ts,
                 row,
+                open_row,
                 self.prices,
                 self.dynamic_rebalance_dates,
                 self.loader,
             )
 
             if date_ts in self.master_rebalance_dates:
-                self._rebalance_master(date_ts, row)
+                self.pending_master_rebalance = True
 
             static_nav = self.static_engine.nav(row)
             dynamic_nav = self.dynamic_engine.nav(row)
