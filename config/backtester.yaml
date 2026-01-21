@@ -1,7 +1,7 @@
 # Backtester Configuration
 # - Any missing keys fall back to research/backtester/config.py:DEFAULT_CONFIG
 
-START_DATE: "2020-01-01"
+START_DATE: "2023-01-01"
 END_DATE: null
 INITIAL_CAPITAL: 100000000
 TRADING_DAYS: 252
@@ -48,6 +48,7 @@ DYNAMIC:
       min_turnover: 30000000000
       turnover_window: 60
     # universe_root: ../data  # optional: override data root for ticker scan
+  SECTOR_MAP_FILE: ../data/processed/sector_map.csv
   LOGIC_PROFILE: null
   LOGIC:
     correlation_filter:

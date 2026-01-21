@@ -4,11 +4,15 @@ import argparse
 import json
 import os
 import sys
+import time
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import numpy as np
 import pandas as pd
 
 if __package__ is None or __package__ == "":
@@ -75,6 +79,16 @@ def _resolve_output_root(cfg: dict) -> Path:
     return root_path
 
 
+def _resolve_config_path(path_value: str | None) -> Path | None:
+    if not path_value:
+        return None
+    path = Path(str(path_value))
+    if path.is_absolute():
+        return path
+    project_root = Path(__file__).resolve().parents[2]
+    return (project_root / path).resolve()
+
+
 def _drawdown_series(equity: pd.Series | None) -> pd.Series:
     if equity is None or equity.empty:
         return pd.Series(dtype=float)
@@ -111,7 +125,255 @@ def _season_mask(index: pd.DatetimeIndex, start_md: str, end_md: str) -> pd.Seri
     )
 
 
+def _load_sector_map(path: Path | None) -> dict[str, str]:
+    if path is None or not path.exists():
+        return {}
+    df = pd.read_csv(path)
+    if df.empty:
+        return {}
+    cols = {c.lower(): c for c in df.columns}
+    code_col = None
+    for key in ("code", "ticker", "symbol"):
+        if key in cols:
+            code_col = cols[key]
+            break
+    sector_col = None
+    for key in ("sector", "industry", "category"):
+        if key in cols:
+            sector_col = cols[key]
+            break
+    if code_col is None or sector_col is None:
+        return {}
+
+    codes = df[code_col].astype(str).str.replace(".0", "", regex=False).str.strip()
+    codes = codes.str.zfill(6)
+    sectors = df[sector_col].astype(str).str.strip()
+    mapping = dict(zip(codes, sectors))
+    return {k: v for k, v in mapping.items() if v and v != "nan"}
+
+
+def _season_window(season_year: int, season: dict) -> tuple[pd.Timestamp, pd.Timestamp]:
+    start_md = str(season.get("start_md", "01-01"))
+    end_md = str(season.get("end_md", "12-31"))
+    start_mm, start_dd = (int(x) for x in start_md.split("-"))
+    end_mm, end_dd = (int(x) for x in end_md.split("-"))
+    start = pd.Timestamp(season_year, start_mm, start_dd)
+    if (start_mm, start_dd) <= (end_mm, end_dd):
+        end = pd.Timestamp(season_year, end_mm, end_dd)
+    else:
+        end = pd.Timestamp(season_year + 1, end_mm, end_dd)
+    return start, end
+
+
+def _build_monthly_heatmap(series: pd.Series, years: int = 10) -> pd.DataFrame:
+    if series is None or series.empty:
+        return pd.DataFrame()
+    monthly = series.resample("M").last().pct_change(fill_method=None).dropna()
+    if monthly.empty:
+        return pd.DataFrame()
+    df = monthly.to_frame("ret")
+    idx = pd.DatetimeIndex(df.index)
+    df["year"] = idx.year
+    df["month"] = idx.month
+    pivot = df.pivot(index="year", columns="month", values="ret")
+    if years > 0:
+        pivot = pivot.loc[pivot.index.sort_values().tolist()[-years:]]
+    return pivot
+
+
+def _build_season_heatmap(
+    series: pd.Series, seasons: list[dict], years: int = 10
+) -> pd.DataFrame:
+    if series is None or series.empty or not seasons:
+        return pd.DataFrame()
+    years_all = sorted(set(pd.DatetimeIndex(series.index).year))
+    if years > 0:
+        years_all = years_all[-years:]
+
+    rows: list[dict[str, Any]] = []
+    for y in years_all:
+        row: dict[str, Any] = {"year": y}
+        for season in seasons:
+            name = str(season.get("name", "Season"))
+            start, end = _season_window(y, season)
+            sub = series.loc[(series.index >= start) & (series.index <= end)]
+            if sub.empty:
+                row[name] = np.nan
+            else:
+                row[name] = float(sub.iloc[-1] / sub.iloc[0] - 1.0)
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).set_index("year")
+    return df
+
+
+def _plot_heatmap(df: pd.DataFrame, title: str, path: Path) -> None:
+    if df is None or df.empty:
+        return
+    fig, ax = plt.subplots(figsize=(12, 6))
+    data = df.values.astype(float)
+    masked = np.ma.masked_invalid(data)
+    im = ax.imshow(masked, aspect="auto", cmap="RdYlGn")
+    ax.set_title(title)
+    ax.set_xlabel("Month/Season")
+    ax.set_ylabel("Year")
+    ax.set_xticks(range(len(df.columns)))
+    ax.set_xticklabels(list(df.columns))
+    ax.set_yticks(range(len(df.index)))
+    ax.set_yticklabels([str(y) for y in df.index])
+    fig.colorbar(im, ax=ax, fraction=0.02, pad=0.02)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_cash_weights(
+    total_cash: pd.Series,
+    dynamic_cash: pd.Series,
+    static_cash: pd.Series,
+    path: Path,
+) -> None:
+    if total_cash is None or total_cash.empty:
+        return
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(total_cash.index, total_cash.to_numpy(), label="Total Cash")
+    if dynamic_cash is not None and not dynamic_cash.empty:
+        ax.plot(dynamic_cash.index, dynamic_cash.to_numpy(), label="Dynamic Cash")
+    if static_cash is not None and not static_cash.empty:
+        ax.plot(static_cash.index, static_cash.to_numpy(), label="Static Cash")
+    ax.set_title("Cash Weight Dynamics")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Cash Weight")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_underwater(drawdown: pd.Series, path: Path) -> None:
+    if drawdown is None or drawdown.empty:
+        return
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.fill_between(drawdown.index, drawdown.to_numpy(), 0, color="#d73027")
+    ax.set_title("Underwater Plot")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Drawdown")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_zoom(
+    equity: pd.Series,
+    benchmark: pd.Series,
+    cash_weight: pd.Series,
+    start: str,
+    end: str,
+    title: str,
+    path: Path,
+) -> None:
+    if equity is None or equity.empty:
+        return
+    sub_eq = equity.loc[start:end]
+    if sub_eq.empty:
+        return
+    sub_eq = sub_eq / sub_eq.iloc[0]
+    sub_bench = None
+    if benchmark is not None and not benchmark.empty:
+        sub_bench = benchmark.loc[start:end]
+        if not sub_bench.empty:
+            sub_bench = sub_bench / sub_bench.iloc[0]
+    sub_cash = None
+    if cash_weight is not None and not cash_weight.empty:
+        sub_cash = cash_weight.loc[start:end]
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(sub_eq.index, sub_eq.values, label="Strategy")
+    if sub_bench is not None and not sub_bench.empty:
+        ax.plot(sub_bench.index, sub_bench.to_numpy(), label="Benchmark")
+    ax.set_title(title)
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Normalized Equity")
+    ax.legend(loc="upper left")
+
+    if sub_cash is not None and not sub_cash.empty:
+        ax2 = ax.twinx()
+        ax2.plot(
+            sub_cash.index, sub_cash.to_numpy(), color="gray", alpha=0.6, label="Cash"
+        )
+        ax2.set_ylabel("Cash Weight")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_architecture(path: Path) -> None:
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.axis("off")
+
+    boxes = [
+        (0.05, 0.6, "Data Loader"),
+        (0.3, 0.6, "Universe Filter"),
+        (0.55, 0.6, "Dual Engine\n(Master/Dynamic)"),
+        (0.8, 0.6, "Executor (HTS)"),
+    ]
+    for x, y, label in boxes:
+        rect = patches.FancyBboxPatch(
+            (x, y),
+            0.18,
+            0.25,
+            boxstyle="round,pad=0.02",
+            edgecolor="#333",
+            facecolor="#f2f2f2",
+        )
+        ax.add_patch(rect)
+        ax.text(x + 0.09, y + 0.125, label, ha="center", va="center", fontsize=9)
+
+    for i in range(len(boxes) - 1):
+        x1 = boxes[i][0] + 0.18
+        y1 = boxes[i][1] + 0.125
+        x2 = boxes[i + 1][0]
+        y2 = boxes[i + 1][1] + 0.125
+        ax.annotate("", xy=(x2, y2), xytext=(x1, y1), arrowprops={"arrowstyle": "->"})
+
+    ax.set_title("System Architecture")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _regime_analysis(
+    benchmark_returns: pd.Series, strategy_returns: pd.Series
+) -> pd.DataFrame:
+    if benchmark_returns is None or benchmark_returns.empty:
+        return pd.DataFrame()
+    r = benchmark_returns.dropna()
+    if r.empty:
+        return pd.DataFrame()
+
+    rolling = (1 + r).rolling(126).apply(lambda x: np.prod(x) - 1, raw=False)
+    regime = pd.Series(index=r.index, dtype=object)
+    regime[rolling > 0.05] = "Bull"
+    regime[rolling < -0.05] = "Bear"
+    regime[(rolling >= -0.05) & (rolling <= 0.05)] = "Sideways"
+    regime = regime.dropna()
+
+    aligned = pd.DataFrame({"regime": regime, "strategy": strategy_returns}).dropna()
+    if aligned.empty:
+        return pd.DataFrame()
+    summary = (
+        aligned.groupby("regime")["strategy"]
+        .agg(["count", "mean", "std"])
+        .rename(columns={"count": "days", "mean": "avg_daily_return", "std": "vol"})
+    )
+    summary["share"] = summary["days"] / summary["days"].sum()
+    return summary.reset_index()
+
+
 def _save_results(result, config_name: str, logic_name: str | None) -> None:
+    report_start = time.perf_counter()
     output_root = _resolve_output_root(result.config)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = output_root / f"{config_name}_{run_id}"
@@ -140,6 +402,17 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         json.dumps(result.config, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
+    sector_map = (
+        result.config.get("SECTOR_MAP", {})
+        or result.config.get("DYNAMIC", {}).get("SECTOR_MAP", {})
+        or {}
+    )
+    if not sector_map:
+        sector_map_path = result.config.get("SECTOR_MAP_FILE") or result.config.get(
+            "DYNAMIC", {}
+        ).get("SECTOR_MAP_FILE")
+        sector_map = _load_sector_map(_resolve_config_path(sector_map_path))
+
     selection_log = list(getattr(result, "dynamic_selection_log", []) or [])
     if selection_log:
         (run_dir / "dynamic_selection.json").write_text(
@@ -148,9 +421,14 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         )
 
         rows: list[dict[str, Any]] = []
+        seasonal_rows: list[dict[str, Any]] = []
         for entry in selection_log:
             date = entry.get("date")
             season = entry.get("season")
+            season_year = entry.get("season_year")
+            season_name = entry.get("season_name")
+            season_start = entry.get("season_start")
+            season_end = entry.get("season_end")
             selected = set(entry.get("selected", []) or [])
             corr_count = entry.get("corr_count", {}) or {}
             momentum = entry.get("momentum", {}) or {}
@@ -163,7 +441,12 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                     {
                         "date": date,
                         "season": season,
+                        "season_year": season_year,
+                        "season_name": season_name,
+                        "season_start": season_start,
+                        "season_end": season_end,
                         "ticker": t,
+                        "sector": sector_map.get(t, "Unknown"),
                         "selected": t in selected,
                         "corr_count": corr_count.get(t),
                         "momentum": momentum.get(t),
@@ -173,8 +456,78 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                     }
                 )
 
+            if selected:
+                score_df = pd.DataFrame(
+                    {
+                        "corr_count": pd.Series(corr_count, dtype="float64"),
+                        "momentum": pd.Series(momentum, dtype="float64"),
+                        "total_score": pd.Series(total_score, dtype="float64"),
+                    }
+                )
+                if not score_df.empty:
+                    score_df = score_df.sort_values(
+                        ["total_score", "corr_count", "momentum"],
+                        ascending=[True, False, False],
+                    )
+                    score_df["rank"] = range(1, len(score_df) + 1)
+                    for t in selected:
+                        rank_val = (
+                            score_df.at[t, "rank"] if t in score_df.index else None
+                        )
+                        rank_num = (
+                            int(rank_val)
+                            if isinstance(rank_val, (int, np.integer))
+                            else None
+                        )
+                        seasonal_rows.append(
+                            {
+                                "date": date,
+                                "season": season,
+                                "season_year": season_year,
+                                "season_name": season_name,
+                                "season_start": season_start,
+                                    # Removed sector rotation PNG generation
+                                "corr_rank": corr_rank.get(t),
+                                "momentum_rank": momentum_rank.get(t),
+                                "total_score": total_score.get(t),
+                            }
+                        )
+
         if rows:
             pd.DataFrame(rows).to_csv(run_dir / "dynamic_selection.csv", index=False)
+
+        if seasonal_rows:
+            pd.DataFrame(seasonal_rows).to_csv(
+            )
+
+        sector_rows: list[dict[str, Any]] = []
+        for entry in selection_log:
+            season_name = entry.get("season_name")
+            selected = entry.get("selected", []) or []
+            total_score = entry.get("total_score", {}) or {}
+            for t in selected:
+                sector_rows.append(
+                    {
+                        "season": season_name,
+                        "ticker": t,
+                        "sector": sector_map.get(t, "Unknown"),
+                        "total_score": total_score.get(t),
+                    }
+                )
+        if sector_rows:
+            sector_df = pd.DataFrame(sector_rows)
+            sector_summary = (
+                sector_df.groupby(["season", "sector"])
+                .agg(pick_count=("ticker", "count"), avg_score=("total_score", "mean"))
+                .reset_index()
+            )
+            sector_summary.to_csv(run_dir / "sector_rotation.csv", index=False)
+            pivot = sector_summary.pivot(
+                index="season", columns="sector", values="pick_count"
+            ).fillna(0)
+            _plot_heatmap(
+                pivot, "Sector Rotation (Pick Count)", run_dir / "sector_rotation.png"
+            )
 
     chart_data = None
     if result.equity is not None and not result.equity.empty:
@@ -204,6 +557,57 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
             chart_data["benchmark_drawdown"] = _drawdown_series(
                 chart_data["benchmark_equity"]
             )
+
+    base_series = (
+        result.benchmark_equity
+        if result.benchmark_equity is not None and not result.benchmark_equity.empty
+        else result.equity
+    )
+    monthly_heatmap = _build_monthly_heatmap(base_series, years=10)
+    _plot_heatmap(
+        monthly_heatmap,
+        "Seasonality Heatmap (Monthly Return)",
+        run_dir / "seasonality_heatmap_monthly.png",
+    )
+
+    seasons_cfg = result.config.get("DYNAMIC", {}).get("SEASONS", []) or []
+    seasonal_heatmap = _build_season_heatmap(base_series, seasons_cfg, years=10)
+    _plot_heatmap(
+        seasonal_heatmap,
+        "Seasonality Heatmap (Season Return)",
+        run_dir / "seasonality_heatmap_seasonal.png",
+    )
+
+    _plot_cash_weights(
+        result.cash_weight,
+        result.dynamic_cash_weight,
+        result.static_cash_weight,
+        run_dir / "cash_weight.png",
+    )
+
+    if chart_data is not None and "drawdown" in chart_data.columns:
+        _plot_underwater(chart_data["drawdown"], run_dir / "underwater.png")
+
+    _plot_zoom(
+        result.equity,
+        result.benchmark_equity,
+        result.cash_weight,
+        "2020-02-15",
+        "2020-04-30",
+        "Zoom-in: 2020 Mar (COVID)",
+        run_dir / "zoom_2020.png",
+    )
+    _plot_zoom(
+        result.equity,
+        result.benchmark_equity,
+        result.cash_weight,
+        "2022-01-01",
+        "2022-12-31",
+        "Zoom-in: 2022 Bear Market",
+        run_dir / "zoom_2022.png",
+    )
+
+    _plot_architecture(run_dir / "architecture.png")
 
     fig, ax = plt.subplots(figsize=(10, 6))
     if result.equity is not None and not result.equity.empty:
@@ -284,6 +688,18 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         fig.savefig(run_dir / "drawdown.png", dpi=150)
         plt.close(fig)
 
+    regime_df = _regime_analysis(
+        (
+            result.benchmark_returns
+            if result.benchmark_returns is not None
+            and not result.benchmark_returns.empty
+            else result.returns
+        ),
+        result.returns,
+    )
+    if not regime_df.empty:
+        regime_df.to_csv(run_dir / "regime_analysis.csv", index=False)
+
     seasons = result.config.get("DYNAMIC", {}).get("SEASONS", []) or []
     prices = result.prices
     season_sections: list[str] = []
@@ -358,8 +774,70 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
             "",
             "- Selection log: dynamic_selection.json",
             "- Flat scores: dynamic_selection.csv",
+            "- Seasonal top picks: dynamic_selection_seasonal.csv",
+            "- Sector rotation: sector_rotation.csv",
+            "- Sector rotation map: sector_rotation.png",
             "",
         ]
+
+    mdd_lines: list[str] = []
+    try:
+        cfg_no_sl = deepcopy(result.config)
+        dyn = cfg_no_sl.setdefault("DYNAMIC", {})
+        logic = dyn.setdefault("LOGIC", {})
+        logic["stop_loss"] = {"type": "none"}
+        alt = run_dual_engine_backtest(
+            config_name=config_name,
+            config=cfg_no_sl,
+            logic_name=logic_name,
+        )
+        mdd_with = _mdd_from_equity(result.equity)
+        mdd_without = _mdd_from_equity(alt.equity)
+        pd.DataFrame(
+            [
+                {"scenario": "with_stop_loss", "mdd": mdd_with},
+                {"scenario": "without_stop_loss", "mdd": mdd_without},
+            ]
+        ).to_csv(run_dir / "mdd_defense.csv", index=False)
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.bar(["With Stop Loss", "Without Stop Loss"], [mdd_with, mdd_without])
+        ax.set_title("MDD Defense Simulation")
+        ax.set_ylabel("MDD")
+        fig.tight_layout()
+        fig.savefig(run_dir / "mdd_defense.png", dpi=150)
+        plt.close(fig)
+        mdd_lines = [
+            "## MDD Defense",
+            "",
+            "- MDD comparison: mdd_defense.csv",
+            "- MDD bar chart: mdd_defense.png",
+            "",
+        ]
+    except Exception:
+        mdd_lines = []
+
+    if not regime_df.empty:
+        regime_lines = [
+            "## Regime Analysis",
+            "",
+            "- Regime summary: regime_analysis.csv",
+            "",
+        ]
+    else:
+        regime_lines = []
+
+    report_seconds = time.perf_counter() - report_start
+    optimization_log = {
+        "run_id": run_id,
+        "report_generation_seconds": round(report_seconds, 4),
+        "baseline_seconds": None,
+        "optimized_seconds": None,
+        "note": "Baseline/optimized timing not captured; add pipeline timing if needed.",
+    }
+    (run_dir / "optimization_log.json").write_text(
+        json.dumps(optimization_log, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     md_lines = [
         f"# Backtester ({config_name})",
@@ -385,6 +863,18 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         f"| TotalReturn | {static_perf['TotalReturn']:.6f} | {dynamic_perf['TotalReturn']:.6f} |",
         "",
         *selection_lines,
+        "## Evidence Outputs",
+        "",
+        "- Seasonality heatmap (monthly): seasonality_heatmap_monthly.png",
+        "- Seasonality heatmap (seasonal): seasonality_heatmap_seasonal.png",
+        "- Cash weight dynamics: cash_weight.png",
+        "- Underwater plot: underwater.png",
+        "- Zoom-in (2020): zoom_2020.png",
+        "- Zoom-in (2022): zoom_2022.png",
+        "- Architecture diagram: architecture.png",
+        "- Optimization log: optimization_log.json",
+        *mdd_lines,
+        *regime_lines,
         "## Charts",
         "",
         "![Equity Curve](equity_curve.png)",
@@ -397,7 +887,11 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         "",
         "## Data",
         "",
-        "- (no csv output)",
+        "- dynamic_selection.csv",
+        "- dynamic_selection_seasonal.csv",
+        "- sector_rotation.csv",
+        "- regime_analysis.csv",
+        "- mdd_defense.csv",
     ]
     (run_dir / "summary.md").write_text("\n".join(md_lines), encoding="utf-8")
 
