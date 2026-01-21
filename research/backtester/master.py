@@ -97,6 +97,8 @@ class MasterPortfolio:
         cash_weight = []
         static_cash_weight = []
         dynamic_cash_weight = []
+        static_rebalance_set = self.static_engine.rebalance_dates(self.prices.index)
+        dynamic_rebalance_set = self.dynamic_engine.rebalance_dates(self.prices.index)
         last_nav: float | None = None
         for date, row in self.prices.iterrows():
             date_ts = pd.Timestamp(cast(Any, date))
@@ -106,14 +108,14 @@ class MasterPortfolio:
                 else row
             )
 
-            self.static_engine.on_day(date_ts, row, open_row, set())
+            self.static_engine.on_day(date_ts, row, open_row, static_rebalance_set)
             self.dynamic_engine.on_day(
                 date_ts,
                 row,
                 open_row,
                 self.full_prices,
                 self.full_open_prices,
-                set(),
+                dynamic_rebalance_set,
                 self.loader,
             )
 

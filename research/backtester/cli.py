@@ -486,7 +486,7 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                                 "season_year": season_year,
                                 "season_name": season_name,
                                 "season_start": season_start,
-                                    # Removed sector rotation PNG generation
+                                # Removed sector rotation PNG generation
                                 "corr_rank": corr_rank.get(t),
                                 "momentum_rank": momentum_rank.get(t),
                                 "total_score": total_score.get(t),
@@ -497,8 +497,7 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
             pd.DataFrame(rows).to_csv(run_dir / "dynamic_selection.csv", index=False)
 
         if seasonal_rows:
-            pd.DataFrame(seasonal_rows).to_csv(
-            )
+            pd.DataFrame(seasonal_rows).to_csv()
 
         sector_rows: list[dict[str, Any]] = []
         for entry in selection_log:

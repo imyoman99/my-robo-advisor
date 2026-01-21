@@ -24,6 +24,27 @@ class DynamicStrategy:
         self.selection_cfg = dynamic_cfg.get("SELECTION", {}) or {}
         self.selection_mode = str(self.selection_cfg.get("mode", "season")).lower()
         self.selection_top_n = int(self.selection_cfg.get("top_n", 10))
+        self.selection_buy_n = int(
+            self.selection_cfg.get("buy_n", self.selection_top_n)
+        )
+        if self.selection_buy_n <= 0:
+            self.selection_buy_n = self.selection_top_n
+        self.selection_buy_n = min(self.selection_buy_n, self.selection_top_n)
+        self.reserve_enabled = bool(self.selection_cfg.get("reserve_enabled", False))
+        self.rebalance_timing = str(
+            self.selection_cfg.get("rebalance_timing", "same_open")
+        ).lower()
+        reserve_order = self.selection_cfg.get("reserve_order", []) or []
+        if isinstance(reserve_order, list):
+            self.reserve_order = [int(x) for x in reserve_order if int(x) > 0]
+        else:
+            self.reserve_order = []
+        self.reserve_from_rank = int(
+            self.selection_cfg.get("reserve_from_rank", self.selection_buy_n + 1)
+        )
+        self.reserve_to_rank = int(
+            self.selection_cfg.get("reserve_to_rank", self.selection_top_n)
+        )
         self.selection_lookback_years = int(self.selection_cfg.get("lookback_years", 3))
         self.selection_corr_threshold = float(
             self.selection_cfg.get("corr_threshold", 0.3)
@@ -31,16 +52,8 @@ class DynamicStrategy:
         self.selection_corr_drop_pct = float(
             self.selection_cfg.get("corr_drop_pct", 0.2)
         )
-        self.selection_momentum_window = int(
-            self.selection_cfg.get(
-                "momentum_window", dynamic_cfg.get("MOMENTUM_WINDOW", 60)
-            )
-        )
-        self.selection_corr_window = int(
-            self.selection_cfg.get(
-                "corr_window", dynamic_cfg.get("CORRELATION_WINDOW", 60)
-            )
-        )
+        self.selection_momentum_window = int(dynamic_cfg.get("MOMENTUM_WINDOW", 60))
+        self.selection_corr_window = int(dynamic_cfg.get("CORRELATION_WINDOW", 60))
         self.selection_weighting = str(
             self.selection_cfg.get("weighting", "equal")
         ).lower()
@@ -69,10 +82,12 @@ class DynamicStrategy:
         self.active_season: Optional[str] = None
         self.active_period: Optional[str] = None
         self.pending_shares: Dict[str, float] | None = None
+        self.pending_targets: Dict[str, float] | None = None
         self.prev_close_prices: Optional[pd.Series] = None
         self.prev_date: Optional[pd.Timestamp] = None
         self.selection_log: List[Dict[str, Any]] = []
         self.last_ranked: Optional[pd.Series] = None
+        self.reserve_list: List[str] = []
 
         self.slot_count = self._infer_slot_count()
         (
@@ -112,6 +127,64 @@ class DynamicStrategy:
             return self._current_season(date)
         next_day = date + pd.Timedelta(days=1)
         return self._current_season(next_day)
+
+    def _build_reserve_list(self, scores: pd.DataFrame) -> List[str]:
+        if scores is None or scores.empty:
+            return []
+        ordered = list(scores.index)
+        if self.reserve_order:
+            result: list[str] = []
+            for r in self.reserve_order:
+                if 1 <= r <= len(ordered):
+                    ticker = ordered[r - 1]
+                    if ticker not in result:
+                        result.append(ticker)
+            return result
+        start_rank = max(1, int(self.reserve_from_rank))
+        end_rank = max(start_rank, int(self.reserve_to_rank))
+        return ordered[start_rank - 1 : end_rank]
+
+    def _fill_from_reserve(self, prices_df: pd.DataFrame, as_of: pd.Timestamp) -> None:
+        if not self.reserve_enabled or not self.reserve_list:
+            return
+        if self.selection_buy_n <= 0:
+            return
+        current = set(self.holdings.keys())
+        if len(current) >= self.selection_buy_n:
+            return
+
+        prices = (
+            prices_df.loc[as_of] if as_of in prices_df.index else prices_df.iloc[-1]
+        )
+        nav = calc_nav(prices, self.holdings, self.cash)
+        if nav <= 0 or self.cash <= 0:
+            return
+
+        candidates = [t for t in self.reserve_list if t not in current]
+        if not candidates:
+            return
+
+        # allocate available cash to next reserve candidate
+        next_ticker = candidates[0]
+        all_tickers = list(current) + [next_ticker]
+        weights = self._auto_targets(all_tickers, prices_df, as_of)
+        target_weight = float(weights.get(next_ticker, 0.0))
+        if target_weight <= 0:
+            return
+
+        target_value = nav * target_weight
+        invest = min(self.cash, target_value)
+        px = float(prices.get(next_ticker, 0.0))
+        if px <= 0 or pd.isna(px):
+            return
+        shares = invest / px
+        if shares <= 0:
+            return
+        trade_value = shares * px
+        fee = apply_fee(trade_value, self.fee)
+        self.cash -= trade_value + fee
+        self.holdings[next_ticker] = self.holdings.get(next_ticker, 0.0) + shares
+        self.high_water[next_ticker] = max(self.high_water.get(next_ticker, px), px)
 
     def _season_year(self, date: pd.Timestamp, season: dict) -> int:
         start_md = str(season.get("start_md", "01-01"))
@@ -409,6 +482,12 @@ class DynamicStrategy:
     ) -> None:
         as_of = self.prev_date or date
 
+        if self.pending_targets is not None:
+            target_shares = self._calc_target_shares(open_prices, self.pending_targets)
+            remaining = self._execute_to_shares(open_prices, target_shares)
+            self.pending_shares = remaining or None
+            self.pending_targets = None
+
         if self.pending_shares:
             remaining = self._execute_to_shares(open_prices, self.pending_shares)
             self.pending_shares = remaining or None
@@ -417,9 +496,14 @@ class DynamicStrategy:
             current_season = self._current_season(date)
             current_year = self._season_year(date, current_season)
             current_key = self._season_key(current_year, current_season)
-            is_rebalancing_day = self.active_period != current_key
+            is_rebalancing_day = (
+                self.active_period != current_key or date in rebalance_set
+            )
             if is_rebalancing_day:
                 self.active_period = current_key
+
+            if date in rebalance_set:
+                as_of = date
 
             season = self._get_target_season(
                 date, is_rebalancing_day=is_rebalancing_day
@@ -454,6 +538,7 @@ class DynamicStrategy:
 
                 ranked = scores["momentum"]
                 self.last_ranked = ranked
+                self.reserve_list = self._build_reserve_list(scores)
             else:
                 if self.last_ranked is None:
                     eligible = self._eligible_season_winners(
@@ -466,6 +551,7 @@ class DynamicStrategy:
                         return
                     ranked = scores["momentum"]
                     self.last_ranked = ranked
+                    self.reserve_list = self._build_reserve_list(scores)
                 else:
                     ranked = self.last_ranked
         else:
@@ -486,13 +572,17 @@ class DynamicStrategy:
 
         if is_rebalancing_day:
             if self.selection_mode == "auto":
-                if self.prev_close_prices is not None:
-                    self._liquidate_all(self.prev_close_prices)
-                selected = list(scores.head(self.selection_top_n).index)
+                selected = list(scores.head(self.selection_buy_n).index)
                 targets = self._auto_targets(selected, prices_df, date)
-                target_shares = self._calc_target_shares(open_prices, targets)
-                remaining = self._execute_to_shares(open_prices, target_shares)
-                self.pending_shares = remaining or None
+                if self.rebalance_timing == "next_open" and date in rebalance_set:
+                    self._liquidate_all(close_prices)
+                    self.pending_targets = targets
+                else:
+                    if self.prev_close_prices is not None:
+                        self._liquidate_all(self.prev_close_prices)
+                    target_shares = self._calc_target_shares(open_prices, targets)
+                    remaining = self._execute_to_shares(open_prices, target_shares)
+                    self.pending_shares = remaining or None
                 self._record_selection(
                     date,
                     season_key,
@@ -505,15 +595,19 @@ class DynamicStrategy:
                     eligible_universe=len(eligible),
                 )
             else:
-                if self.prev_close_prices is not None:
-                    self._liquidate_all(self.prev_close_prices)
                 selected = self.selector.select(ranked, self.slot_count)
                 targets = self.allocator.targets(
                     prices=prices_df, tickers=selected, as_of=date
                 )
-                target_shares = self._calc_target_shares(open_prices, targets)
-                remaining = self._execute_to_shares(open_prices, target_shares)
-                self.pending_shares = remaining or None
+                if self.rebalance_timing == "next_open" and date in rebalance_set:
+                    self._liquidate_all(close_prices)
+                    self.pending_targets = targets
+                else:
+                    if self.prev_close_prices is not None:
+                        self._liquidate_all(self.prev_close_prices)
+                    target_shares = self._calc_target_shares(open_prices, targets)
+                    remaining = self._execute_to_shares(open_prices, target_shares)
+                    self.pending_shares = remaining or None
 
         state = DynamicState(
             cash=self.cash, holdings=self.holdings, high_water=self.high_water
@@ -524,6 +618,9 @@ class DynamicStrategy:
             state.holdings,
             state.high_water,
         )
+
+        if self.selection_mode == "auto" and self.reserve_enabled:
+            self._fill_from_reserve(prices_df, date)
 
         self.prev_close_prices = close_prices
         self.prev_date = date
