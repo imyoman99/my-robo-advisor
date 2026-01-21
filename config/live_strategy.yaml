@@ -1,0 +1,47 @@
+# Live Strategy Configuration
+# - Backtester와 분리된 라이브 전용 설정
+
+DYNAMIC:
+  RATIO: 0.5
+  FEES: 0.0022
+  MOMENTUM_WINDOW: 60
+  CORRELATION_WINDOW: 60
+  REBALANCE_FREQ: Monthly
+  SELECTION:
+    mode: auto
+    top_n: 10
+    buy_n: 3
+    lookback_years: 3
+    weighting: equal
+    FILTERS:
+      min_age_days: 750
+      min_price: 1000
+      min_turnover: 2000000000
+      turnover_window: 20
+  LOGIC:
+    correlation_filter:
+      type: average
+      threshold: 0.4
+      window: 60
+    momentum_ranker:
+      type: simple
+      window: 60
+    selector:
+      type: rank_range
+      rank_range: [1, 3]
+      replacement_order: []
+    allocator:
+      type: slot_weights
+      slot_weights: [0.34, 0.33, 0.33]
+    stop_loss:
+      type: trailing_pct
+      pct: 0.05
+
+STATIC:
+  RATIO: 0.5
+  REBALANCE_FREQ: Monthly
+  ASSETS:
+    KOSPI200: "069500"
+    BOND10Y: "148070"
+    GOLD: "132030"
+  WEIGHTS: [0.4, 0.4, 0.2]

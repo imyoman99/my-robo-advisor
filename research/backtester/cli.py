@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+import warnings
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,18 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 import pandas as pd
+
+
+def _configure_plot_fonts() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Glyph .* missing from font",
+        category=UserWarning,
+    )
+    if sys.platform.startswith("win"):
+        plt.rcParams["font.family"] = "Malgun Gothic"
+    plt.rcParams["axes.unicode_minus"] = False
+
 
 if __package__ is None or __package__ == "":
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +45,7 @@ else:
 
 
 def main() -> None:
+    _configure_plot_fonts()
     parser = argparse.ArgumentParser(description="Backtester")
     parser.add_argument(
         "--config", type=str, default="backtester", help="config/{name}.yaml"
@@ -541,47 +555,107 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                     }
                 )
                 if not score_df.empty:
-                    score_df = score_df.sort_values(
-                        ["total_score", "corr_count", "momentum"],
-                        ascending=[True, False, False],
+                    if "total_score" not in score_df.columns:
+                        score_df["total_score"] = np.nan
+                    if score_df["total_score"].isna().all():
+                        score_df["total_score"] = score_df["momentum"].fillna(
+                            0
+                        ) + score_df["corr_count"].fillna(0)
+                    score_df = (
+                        score_df.reset_index()
+                        .rename(columns={"index": "ticker"})
+                        .sort_values(
+                            ["total_score", "corr_count", "momentum", "ticker"],
+                            ascending=[False, False, False, True],
+                        )
                     )
                     score_df["rank"] = range(1, len(score_df) + 1)
-                    for t in selected:
-                        rank_val = (
-                            score_df.at[t, "rank"] if t in score_df.index else None
-                        )
-                        rank_num = (
-                            int(rank_val)
-                            if isinstance(rank_val, (int, np.integer))
-                            else None
-                        )
+                    score_df = score_df.set_index("ticker")
+                    top_n = int(selection_cfg.get("top_n", 0))
+                    if top_n <= 0:
+                        top_n = len(score_df)
+                    picks = score_df.sort_values("rank").head(top_n)
+                    selected_set = set(selected)
+                    for t, row in picks.iterrows():
                         seasonal_rows.append(
                             {
+                                "date": date,
                                 "season": season_name,
                                 "season_end": season_end,
                                 "ref_years": ref_years,
                                 "ticker": t,
                                 "name": name_map.get(t, ""),
                                 "sector": sector_map.get(t, "Unknown"),
-                                "rank": rank_num,
+                                "selected": t in selected_set,
+                                "rank": (
+                                    int(row["rank"]) if pd.notna(row["rank"]) else None
+                                ),
                                 "total_score": total_score.get(t),
                             }
                         )
 
         if rows:
-            _round_numeric_df(pd.DataFrame(rows)).to_csv(
-                run_dir / "dynamic_selection.csv", index=False
+            df = pd.DataFrame(
+                rows,
+                columns=[
+                    "date",
+                    "season_year",
+                    "season_name",
+                    "season_start",
+                    "season_end",
+                    "ticker",
+                    "name",
+                    "sector",
+                    "selected",
+                    "corr_count",
+                    "momentum",
+                    "corr_rank",
+                    "momentum_rank",
+                    "total_score",
+                ],
+            )
+            if not df.empty:
+                num_cols = df.select_dtypes(include=["number"]).columns
+                round_cols = [c for c in num_cols if c != "total_score"]
+                if round_cols:
+                    df.loc[:, round_cols] = df.loc[:, round_cols].round(3)
+            df.to_csv(
+                run_dir / "dynamic_selection.csv", index=False, encoding="utf-8-sig"
             )
 
-        if seasonal_rows:
-            seasonal_df = pd.DataFrame(seasonal_rows)
+        seasonal_df = pd.DataFrame(
+            seasonal_rows,
+            columns=[
+                "date",
+                "season",
+                "season_end",
+                "ref_years",
+                "ticker",
+                "name",
+                "sector",
+                "selected",
+                "rank",
+                "total_score",
+            ],
+        )
+        if not seasonal_df.empty:
+            seasonal_df = seasonal_df.drop_duplicates(
+                subset=["date", "ticker", "season_end", "ref_years"], keep="first"
+            )
             if "season_end" in seasonal_df.columns and "rank" in seasonal_df.columns:
                 seasonal_df = seasonal_df.sort_values(
-                    ["season_end", "rank"], ascending=[True, True]
+                    ["date", "season_end", "rank"], ascending=[True, True, True]
                 )
-            _round_numeric_df(seasonal_df).to_csv(
-                run_dir / "dynamic_selection_seasonal.csv", index=False
-            )
+        if not seasonal_df.empty:
+            num_cols = seasonal_df.select_dtypes(include=["number"]).columns
+            round_cols = [c for c in num_cols if c != "total_score"]
+            if round_cols:
+                seasonal_df.loc[:, round_cols] = seasonal_df.loc[:, round_cols].round(3)
+        seasonal_df.to_csv(
+            run_dir / "dynamic_selection_seasonal.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
 
         sector_rows: list[dict[str, Any]] = []
         for entry in selection_log:
@@ -605,14 +679,13 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                 .reset_index()
             )
             _round_numeric_df(sector_summary).to_csv(
-                run_dir / "sector_rotation.csv", index=False
+                run_dir / "sector_rotation.csv",
+                index=False,
+                encoding="utf-8-sig",
             )
-            pivot = sector_summary.pivot(
+            _ = sector_summary.pivot(
                 index="season", columns="sector", values="pick_count"
             ).fillna(0)
-            _plot_heatmap(
-                pivot, "Sector Rotation (Pick Count)", run_dir / "sector_rotation.png"
-            )
 
     chart_data = None
     if result.equity is not None and not result.equity.empty:
@@ -784,7 +857,9 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
     )
     if not regime_df.empty:
         _round_numeric_df(regime_df).to_csv(
-            run_dir / "regime_analysis.csv", index=False
+            run_dir / "regime_analysis.csv",
+            index=False,
+            encoding="utf-8-sig",
         )
 
     seasons = result.config.get("DYNAMIC", {}).get("SEASONS", []) or []
@@ -863,7 +938,6 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
             "- Flat scores: dynamic_selection.csv",
             "- Seasonal top picks: dynamic_selection_seasonal.csv",
             "- Sector rotation: sector_rotation.csv",
-            "- Sector rotation map: sector_rotation.png",
             "",
         ]
 
@@ -886,7 +960,11 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                 {"scenario": "without_stop_loss", "mdd": mdd_without},
             ]
         )
-        _round_numeric_df(mdd_df).to_csv(run_dir / "mdd_defense.csv", index=False)
+        _round_numeric_df(mdd_df).to_csv(
+            run_dir / "mdd_defense.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
 
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.bar(["With Stop Loss", "Without Stop Loss"], [mdd_with, mdd_without])

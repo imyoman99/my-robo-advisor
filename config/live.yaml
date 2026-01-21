@@ -1,5 +1,12 @@
 mode: paper
 initial_cash: 10000000
-universe_key: cio_universe
-universe: []
+strategy_config: live_strategy
+broker: kis
+data_source: kis
+use_cache: false
+cache_dir: null
+lookback_days: null
+state_file: live/state.json
+dynamic_universe_source: fdr_krx
+universe_limit: null
 slack_webhook: null
