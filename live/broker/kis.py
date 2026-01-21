@@ -12,12 +12,9 @@ class KISBroker(LiveBroker):
         self,
         mock: bool | None = None,
         *,
-        state_path: str | None = None,
         initial_cash: float = 10_000_000,
     ) -> None:
-        self.client = KISClient(
-            mock=mock, state_path=state_path, initial_cash=initial_cash
-        )
+        self.client = KISClient(mock=mock, initial_cash=initial_cash)
 
     def get_price(self, symbol: str) -> float:
         return self.client.get_price(symbol)

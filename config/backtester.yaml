@@ -8,8 +8,8 @@ TRADING_DAYS: 252
 FFILL: true
 
 JSON:
-  enabled: false
-  run_dir: backtester_20260120_141740
+  enabled: true
+  run_dir: backtester_20260121_091739
 
 STATIC:
   RATIO: 0.5
@@ -100,19 +100,19 @@ DYNAMIC:
     - name: Spring
       start_md: "01-01"
       end_md: "03-31"
-      tickers: ["000720","028050","047040","006360","000150","010140","034020","004020","005490","036460"]
+      tickers: []
     - name: Summer
       start_md: "04-01"
       end_md: "06-30"
-      tickers: ["005930","000660","035420","035720","373220","051910","006400","247540","096770","009150"]
+      tickers: []
     - name: Fall
       start_md: "07-01"
       end_md: "09-30"
-      tickers: ["055550","105560","086790","316140","139130","138930","003540","000810","032830","015760"]
+      tickers: []
     - name: Winter
       start_md: "10-01"
       end_md: "12-31"
-      tickers: ["207940","068270","326030","006280","145020","128940","069620","003090","302440","000100"]
+      tickers: []
 
 BENCHMARK_TICKER: "069500"
 

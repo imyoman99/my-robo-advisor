@@ -729,6 +729,38 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
     )
 
     seasons_cfg = result.config.get("DYNAMIC", {}).get("SEASONS", []) or []
+    # If selection mode is auto and selection_log exists, prefer actual selected tickers
+    selection_cfg = result.config.get("DYNAMIC", {}).get("SELECTION", {}) or {}
+    selection_mode = str(selection_cfg.get("mode", "auto")).lower()
+    use_actual_selected = selection_mode == "auto" and bool(selection_log)
+    # build a map of latest selection entries by season name
+    latest_selection_by_season: dict[str, dict] = {}
+    if use_actual_selected:
+        try:
+            for entry in selection_log:
+                sname = entry.get("season_name") or entry.get("season")
+                if not sname:
+                    continue
+                prev = latest_selection_by_season.get(sname)
+                # compare by season_year then date
+                if prev is None:
+                    latest_selection_by_season[sname] = entry
+                    continue
+                # prefer larger season_year, if equal prefer later date
+                try:
+                    prev_year = int(prev.get("season_year", -1))
+                    prev_date = prev.get("date", "")
+                    cur_year = int(entry.get("season_year", -1))
+                    cur_date = entry.get("date", "")
+                except Exception:
+                    latest_selection_by_season[sname] = entry
+                    continue
+                if cur_year > prev_year or (
+                    cur_year == prev_year and cur_date > prev_date
+                ):
+                    latest_selection_by_season[sname] = entry
+        except Exception:
+            latest_selection_by_season = {}
     seasonal_heatmap = _build_season_heatmap(base_series, seasons_cfg, years=10)
     _plot_heatmap(
         seasonal_heatmap,
@@ -869,7 +901,16 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         name = str(season.get("name", "Season"))
         start_md = str(season.get("start_md", "01-01"))
         end_md = str(season.get("end_md", "12-31"))
-        tickers = [str(t) for t in (season.get("tickers", []) or [])]
+        # If in auto mode and we have a latest selection for this season, show that instead
+        if use_actual_selected and name in latest_selection_by_season:
+            try:
+                tickers = list(
+                    latest_selection_by_season[name].get("selected", []) or []
+                )
+            except Exception:
+                tickers = [str(t) for t in (season.get("tickers", []) or [])]
+        else:
+            tickers = [str(t) for t in (season.get("tickers", []) or [])]
         available = [t for t in tickers if t in prices.columns]
 
         season_sections.append(f"### {name}")

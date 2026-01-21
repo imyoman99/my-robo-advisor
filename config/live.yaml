@@ -7,6 +7,6 @@ use_cache: false
 cache_dir: null
 lookback_days: null
 state_file: live/state.json
-dynamic_universe_source: fdr_krx
+dynamic_universe_source: downloader
 universe_limit: null
 slack_webhook: null
