@@ -118,6 +118,27 @@ def _format_metrics(metrics: dict) -> dict:
     }
 
 
+def _round_numeric_df(df: pd.DataFrame, decimals: int = 3) -> pd.DataFrame:
+    if df.empty:
+        return df
+    num_cols = df.select_dtypes(include=["number"]).columns
+    if len(num_cols) == 0:
+        return df
+    df.loc[:, num_cols] = df.loc[:, num_cols].round(decimals)
+    return df
+
+
+def _format_ref_years(season_year: Any, lookback_years: int) -> str:
+    try:
+        year = int(season_year)
+    except (TypeError, ValueError):
+        return ""
+    if lookback_years <= 1:
+        return str(year)
+    start = year - lookback_years + 1
+    return f"{start}-{year}"
+
+
 def _season_mask(index: pd.DatetimeIndex, start_md: str, end_md: str) -> pd.Series:
     return pd.Series(
         [month_day_in_season(pd.Timestamp(d), start_md, end_md) for d in index],
@@ -149,6 +170,33 @@ def _load_sector_map(path: Path | None) -> dict[str, str]:
     codes = codes.str.zfill(6)
     sectors = df[sector_col].astype(str).str.strip()
     mapping = dict(zip(codes, sectors))
+    return {k: v for k, v in mapping.items() if v and v != "nan"}
+
+
+def _load_name_map(path: Path | None) -> dict[str, str]:
+    if path is None or not path.exists():
+        return {}
+    df = pd.read_csv(path)
+    if df.empty:
+        return {}
+    cols = {c.lower(): c for c in df.columns}
+    code_col = None
+    for key in ("code", "ticker", "symbol"):
+        if key in cols:
+            code_col = cols[key]
+            break
+    name_col = None
+    for key in ("name", "종목명", "회사명", "company", "company_name"):
+        if key.lower() in cols:
+            name_col = cols[key.lower()]
+            break
+    if code_col is None or name_col is None:
+        return {}
+
+    codes = df[code_col].astype(str).str.replace(".0", "", regex=False).str.strip()
+    codes = codes.str.zfill(6)
+    names = df[name_col].astype(str).str.strip()
+    mapping = dict(zip(codes, names))
     return {k: v for k, v in mapping.items() if v and v != "nan"}
 
 
@@ -413,8 +461,34 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         ).get("SECTOR_MAP_FILE")
         sector_map = _load_sector_map(_resolve_config_path(sector_map_path))
 
+    name_map = (
+        result.config.get("NAME_MAP", {})
+        or result.config.get("DYNAMIC", {}).get("NAME_MAP", {})
+        or {}
+    )
+    if not name_map:
+        name_map_path = result.config.get("NAME_MAP_FILE") or result.config.get(
+            "DYNAMIC", {}
+        ).get("NAME_MAP_FILE")
+        if not name_map_path:
+            name_map_path = result.config.get("SECTOR_MAP_FILE") or result.config.get(
+                "DYNAMIC", {}
+            ).get("SECTOR_MAP_FILE")
+        name_map = _load_name_map(_resolve_config_path(name_map_path))
+        if not name_map:
+            project_root = Path(__file__).resolve().parents[2]
+            for fallback in (
+                project_root / "data" / "processed" / "krx_master_with_sector.csv",
+                project_root / "data" / "processed" / "sector_map.csv",
+            ):
+                name_map = _load_name_map(fallback)
+                if name_map:
+                    break
+
     selection_log = list(getattr(result, "dynamic_selection_log", []) or [])
     if selection_log:
+        selection_cfg = result.config.get("DYNAMIC", {}).get("SELECTION", {}) or {}
+        lookback_years = int(selection_cfg.get("lookback_years", 3))
         (run_dir / "dynamic_selection.json").write_text(
             json.dumps(selection_log, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -446,6 +520,7 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                         "season_start": season_start,
                         "season_end": season_end,
                         "ticker": t,
+                        "name": name_map.get(t, ""),
                         "sector": sector_map.get(t, "Unknown"),
                         "selected": t in selected,
                         "corr_count": corr_count.get(t),
@@ -457,6 +532,7 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                 )
 
             if selected:
+                ref_years = _format_ref_years(season_year, lookback_years)
                 score_df = pd.DataFrame(
                     {
                         "corr_count": pd.Series(corr_count, dtype="float64"),
@@ -481,23 +557,31 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                         )
                         seasonal_rows.append(
                             {
-                                "date": date,
-                                "season": season,
-                                "season_year": season_year,
-                                "season_name": season_name,
-                                "season_start": season_start,
-                                # Removed sector rotation PNG generation
-                                "corr_rank": corr_rank.get(t),
-                                "momentum_rank": momentum_rank.get(t),
+                                "season": season_name,
+                                "season_end": season_end,
+                                "ref_years": ref_years,
+                                "ticker": t,
+                                "name": name_map.get(t, ""),
+                                "sector": sector_map.get(t, "Unknown"),
+                                "rank": rank_num,
                                 "total_score": total_score.get(t),
                             }
                         )
 
         if rows:
-            pd.DataFrame(rows).to_csv(run_dir / "dynamic_selection.csv", index=False)
+            _round_numeric_df(pd.DataFrame(rows)).to_csv(
+                run_dir / "dynamic_selection.csv", index=False
+            )
 
         if seasonal_rows:
-            pd.DataFrame(seasonal_rows).to_csv()
+            seasonal_df = pd.DataFrame(seasonal_rows)
+            if "season_end" in seasonal_df.columns and "rank" in seasonal_df.columns:
+                seasonal_df = seasonal_df.sort_values(
+                    ["season_end", "rank"], ascending=[True, True]
+                )
+            _round_numeric_df(seasonal_df).to_csv(
+                run_dir / "dynamic_selection_seasonal.csv", index=False
+            )
 
         sector_rows: list[dict[str, Any]] = []
         for entry in selection_log:
@@ -520,7 +604,9 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
                 .agg(pick_count=("ticker", "count"), avg_score=("total_score", "mean"))
                 .reset_index()
             )
-            sector_summary.to_csv(run_dir / "sector_rotation.csv", index=False)
+            _round_numeric_df(sector_summary).to_csv(
+                run_dir / "sector_rotation.csv", index=False
+            )
             pivot = sector_summary.pivot(
                 index="season", columns="sector", values="pick_count"
             ).fillna(0)
@@ -697,7 +783,9 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         result.returns,
     )
     if not regime_df.empty:
-        regime_df.to_csv(run_dir / "regime_analysis.csv", index=False)
+        _round_numeric_df(regime_df).to_csv(
+            run_dir / "regime_analysis.csv", index=False
+        )
 
     seasons = result.config.get("DYNAMIC", {}).get("SEASONS", []) or []
     prices = result.prices
@@ -792,12 +880,13 @@ def _save_results(result, config_name: str, logic_name: str | None) -> None:
         )
         mdd_with = _mdd_from_equity(result.equity)
         mdd_without = _mdd_from_equity(alt.equity)
-        pd.DataFrame(
+        mdd_df = pd.DataFrame(
             [
                 {"scenario": "with_stop_loss", "mdd": mdd_with},
                 {"scenario": "without_stop_loss", "mdd": mdd_without},
             ]
-        ).to_csv(run_dir / "mdd_defense.csv", index=False)
+        )
+        _round_numeric_df(mdd_df).to_csv(run_dir / "mdd_defense.csv", index=False)
 
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.bar(["With Stop Loss", "Without Stop Loss"], [mdd_with, mdd_without])
