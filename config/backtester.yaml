@@ -70,21 +70,23 @@ DYNAMIC:
       # season 모드에서 상관필터 설정
       type: average   # none | average
       threshold: 0.4
+      window: 60
     momentum_ranker:
       # season 모드에서 모멘텀 랭커
       type: simple   # simple | vol_adj
+      window: 60
       # vol_adj 옵션일 때만 사용
       # vol_window: 60
       # min_vol: 1.0e-8
     selector:
       # season 모드 셀렉터
       type: rank_range   # rank_range | topn
-      rank_range: [4, 7]
-      replacement_order: [1, 2, 3, 8, 9, 10]
+      rank_range: [3, 6]
+      replacement_order: [1, 2, 7, 8, 9, 10]
     allocator:
       # season 모드 비중 할당
       type: slot_weights # slot_weights | equal | inv_vol
-      slot_weights: [0.3, 0.3, 0.2, 0.2]
+      slot_weights: [0.25, 0.25, 0.25, 0.25]
       # inv_vol 옵션일 때만 사용
       # window: 60
       # min_vol: 1.0e-8
@@ -92,7 +94,7 @@ DYNAMIC:
     stop_loss:
       # 스톱로스(일단위 종가 기준)
       type: trailing_pct # trailing_pct | none
-      pct: 0.05          # 예: 0.05 = -5% 트레일링
+      pct: 0.05
   # NOTE: mode=auto이면 SEASONS는 무시됩니다.
   SEASONS:
     - name: Spring
