@@ -134,6 +134,7 @@ class TrailingStopLoss:
     fee: float
     selector: Selector
     slot_count: int
+    replace: bool = True
 
     def apply(
         self, *, state: DynamicState, prices: pd.Series, ranked: pd.Series
@@ -161,16 +162,19 @@ class TrailingStopLoss:
                 cash += trade_value - (abs(trade_value) * float(self.fee))
                 high_water.pop(symbol, None)
 
-                candidates: List[str] = self.selector.select(
-                    ranked, int(self.slot_count)
-                )
-                for cand in candidates:
-                    if cand not in holdings:
-                        holdings[cand] = 0.0
-                        cand_px = float(prices.get(cand, 0.0))
-                        high_water[cand] = (
-                            cand_px if (cand_px > 0 and not pd.isna(cand_px)) else 0.0
-                        )
-                        break
+                if self.replace:
+                    candidates: List[str] = self.selector.select(
+                        ranked, int(self.slot_count)
+                    )
+                    for cand in candidates:
+                        if cand not in holdings:
+                            holdings[cand] = 0.0
+                            cand_px = float(prices.get(cand, 0.0))
+                            high_water[cand] = (
+                                cand_px
+                                if (cand_px > 0 and not pd.isna(cand_px))
+                                else 0.0
+                            )
+                            break
 
         return DynamicState(cash=cash, holdings=holdings, high_water=high_water)

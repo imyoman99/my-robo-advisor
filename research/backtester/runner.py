@@ -28,6 +28,9 @@ class DualEngineResult:
     static_returns: pd.Series
     dynamic_equity: pd.Series
     dynamic_returns: pd.Series
+    cash_weight: pd.Series
+    static_cash_weight: pd.Series
+    dynamic_cash_weight: pd.Series
     benchmark_equity: pd.Series
     benchmark_returns: pd.Series
     performance: Dict[str, float]
@@ -85,6 +88,9 @@ def run_dual_engine_backtest(
         static_returns=static_returns,
         dynamic_equity=dynamic_equity,
         dynamic_returns=dynamic_returns,
+        cash_weight=master.cash_weight,
+        static_cash_weight=master.static_cash_weight,
+        dynamic_cash_weight=master.dynamic_cash_weight,
         benchmark_equity=benchmark_equity,
         benchmark_returns=benchmark_returns,
         performance=perf,

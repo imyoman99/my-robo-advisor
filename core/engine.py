@@ -162,6 +162,14 @@ def build_dynamic_components(
 
     sl_cfg = logic.get("stop_loss", {}) or {}
     sl_type = str(sl_cfg.get("type", "trailing_pct")).lower()
+    selection_cfg = (
+        (dynamic.get("SELECTION", {}) or {}) if isinstance(dynamic, dict) else {}
+    )
+    reserve_enabled = bool(selection_cfg.get("reserve_enabled", False))
+    replace_flag = sl_cfg.get("replace")
+    if replace_flag is None:
+        replace_flag = not reserve_enabled
+    replace_flag = bool(replace_flag)
     if sl_type in ["none", "off", "disabled"] or float(sl_cfg.get("pct", 0.0)) <= 0:
         stop_loss: StopLoss = NoStopLoss()
     else:
@@ -170,6 +178,7 @@ def build_dynamic_components(
             fee=float(fee),
             selector=selector,
             slot_count=int(slot_count),
+            replace=replace_flag,
         )
 
     return correlation, momentum, selector, allocator, stop_loss

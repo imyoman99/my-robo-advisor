@@ -4,3 +4,4 @@ pyyaml
 requests
 finance-datareader
 matplotlib
+openpyxl
