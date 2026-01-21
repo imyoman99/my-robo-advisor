@@ -53,27 +53,27 @@ DYNAMIC:
     correlation_filter:
       type: average   # none | average
       threshold: 0.4
-      window: 60
+      window: 22
     momentum_ranker:
       type: simple   # simple | vol_adj
-      window: 60
+      window: 22
       # vol_adj 옵션일 때만 사용
       # vol_window: 60
       # min_vol: 1.0e-8
     selector:
       type: rank_range   # rank_range | topn
-      rank_range: [4, 7]
-      replacement_order: [1, 2, 3, 8, 9, 10]
+      rank_range: [3, 6]
+      replacement_order: [1, 2, 7, 8, 9, 10]
     allocator:
       type: slot_weights # slot_weights | equal | inv_vol
-      slot_weights: [0.3, 0.3, 0.2, 0.2]
+      slot_weights: [0.25, 0.25, 0.25, 0.25]
       # inv_vol 옵션일 때만 사용
       # window: 60
       # min_vol: 1.0e-8
       # max_weight: 0.6
     stop_loss:
       type: trailing_pct # trailing_pct | none
-      pct: 0.05
+      pct: 0.07
   # NOTE: mode=auto이면 SEASONS는 무시됩니다.
   SEASONS:
     - name: Spring
